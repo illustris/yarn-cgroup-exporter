@@ -3,17 +3,28 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <curl/curl.h>
 
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 //Container_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 
+#define DEBUG 1
+#define debug_print(fmt, ...) \
+	do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
+
+#define VERBOSE 0
+#define debug_print_verbose(fmt, ...) \
+	do { if (VERBOSE) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
+
 char rm1_url[128];
 char rm2_url[128];
 char* active_rm;
 
 char cache_path[256] = "/dev/shm/yarn_exporter_cache";
+unsigned int cache_hit = 0;
+unsigned int cache_miss = 0;
 
 unsigned int cache_expiry = 2;
 
@@ -37,6 +48,7 @@ void init_string(struct string *s)
 
 size_t writefunc(void *ptr, size_t size, size_t nmemb, struct string *s)
 {
+	debug_print("writefunc: adding %zu bytes to struct string %p\n",nmemb,s);
 	size_t new_len = s->len + size*nmemb;
 	s->ptr = realloc(s->ptr, new_len+1);
 	if (s->ptr == NULL)
@@ -86,10 +98,11 @@ void initcache()
 
 int cache_app(struct app a)
 {
+	debug_print("cache_app: cache application_%llu_%04u\n",a.cluster_timestamp,a.id);
 	FILE *outfile;
 	char cache_file[256];
 
-	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,a.cluster_timestamp,a.id);
+	sprintf(cache_file,"%s/applications/application_%llu_%04u\n",cache_path,a.cluster_timestamp,a.id);
 	outfile = fopen (cache_file, "w");
 	if (outfile == NULL)
 	{
@@ -105,25 +118,53 @@ int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, s
 {
 	FILE *infile;
 	char cache_file[256];
-
-	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,cluster_timestamp,id);
+	debug_print_verbose("read_cached_app: attempting to load application_%llu_%04u\n",cluster_timestamp,id);
+	sprintf(cache_file,"%s/applications/application_%llu_%04u\n",cache_path,cluster_timestamp,id);
 	infile = fopen (cache_file, "r");
 	if (infile == NULL)
 	{
-		//fprintf(stderr, "\nError opend file\n");
+		debug_print("read_cached_app: cache miss for application_%llu_%04u\n",cluster_timestamp,id);
+		cache_miss++;
 		return 0;
 	}
 	fread(a, sizeof(struct app), 1, infile);
 	fclose(infile);
-	printf("Loaded %llu %u from cache\n",cluster_timestamp, id);
+	debug_print_verbose("read_cached_app: cache hit for application_%llu_%04u\n",cluster_timestamp,id);
+	cache_hit++;
 	return 1;
 }
 
 void prune_cache()
 {
-	char cmd[256];
-	sprintf(cmd,"find %s -type f -mmin +%u -exec rm {} \\;",cache_path,cache_expiry);
-	// TODO: prune cache
+	char prune_cache_path[256];
+	char cache_age[12];
+	char* cmd[] = {"find",0,"-name","application_*","-type","f","-amin",0,"-exec","rm","{}",";",0};
+	sprintf(prune_cache_path,"%s/applications",cache_path);
+	cmd[1] = prune_cache_path;
+	sprintf(cache_age,"%s%u","+",cache_expiry);
+	cmd[7] = cache_age;
+	debug_print("prune_cache: calling fork\n");
+	pid_t pid = fork();
+
+	if (pid == -1)
+	{
+		debug_print("prune_cache: fork failed\n");
+		return;
+	}
+	else if (pid > 0)
+	{
+		int status;
+		debug_print("prune_cache: parent: waiting\n");
+		waitpid(pid, &status, 0);
+		debug_print("prune_cache: parent: resume\n");
+	}
+	else
+	{
+		debug_print("prune_cache: child: pruning %s\n",cmd[1]);
+		execvp(cmd[0],cmd);
+		debug_print("prune_cache: child: unexpected return from execvp\n");
+		_exit(EXIT_FAILURE);
+	}
 }
 
 int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, struct app *a)
@@ -132,11 +173,11 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 	char app_url[256];
 	char *ptr;
 	char *ptr1;
-	printf("Fetching %llu %u from RM\n",cluster_timestamp,app_id);
+	debug_print("getapp_rm: fetching application_%llu_%04u\n",cluster_timestamp,app_id);
 	while(!success)
 	{
-		printf("IN LOOP\n");
 		sprintf(app_url,"%s/ws/v1/cluster/apps/application_%llu_%04u",active_rm,cluster_timestamp,app_id);
+		debug_print_verbose("getapp_rm: URL: %s\n",app_url);
 		CURL *curl;
 		CURLcode res;
 		curl = curl_easy_init();
@@ -148,16 +189,16 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
 		res = curl_easy_perform(curl);
-
 		ptr = strstr(s.ptr,"is standby RM");
 		if(!failover)
 		{
 			if(ptr)
 			{
 				failover = 1;
+				debug_print("getapp_rm: failover active RM from %s ",active_rm);
 				active_rm = (char *)((unsigned long long int)rm1_url ^ (unsigned long long int) active_rm);
 				active_rm = (char *)((unsigned long long int)rm2_url ^ (unsigned long long int) active_rm);
-				printf("RM failover \n");
+				debug_print("to %s\n",active_rm);
 			}
 			else
 			{
@@ -173,6 +214,7 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 
 		if(success)
 		{
+			debug_print_verbose("getapp_rm: response[%zu]: %s\n",s.len,s.ptr);
 			ptr = strstr(s.ptr,"\"user\":");
 			ptr1 = strstr(ptr,",");
 			*(ptr1-1) = 0;
@@ -206,8 +248,6 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 			(*a).id = app_id;
 			(*a).cluster_timestamp = cluster_timestamp;
 		}
-		//printf("%lu\n%s\n", s.len, s.ptr);
-		// Need to save "user", "name", "queue", "startedTime", "applicationType"
 
 		free(s.ptr);
 
@@ -235,8 +275,6 @@ void parsecgrp(char *cgrp)
 	}
 	cnt_name[i] = 0;
 	sscanf(cnt_name,"%llu_%llu_%llu_%llu_%llu",&epoch,&cluster_timestamp,&app_id,&attempt_id,&container_id);
-	printf("%s\n",cnt_name);
-	printf("%llu_%llu_%04llu_%02llu_%06llu\n\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
 	//printf("User: %s\n",a.user);
 	if(!read_cached_app(cluster_timestamp,app_id,&a))
 	{
@@ -259,9 +297,12 @@ void gen()
 	while (fgets(cgrp, sizeof(cgrp), fp) != NULL)
 	{
 		//printf("%s", cgrp);
+		debug_print_verbose("gen: calling parsecgrp(%s)\n",cgrp);
 		parsecgrp(cgrp);
 	}
 	pclose(fp);
+	debug_print("gen: %u cache hits, %u cache misses. %.2f %% cache hit rate\n",cache_hit,cache_miss,100*(float)cache_hit/((float)cache_miss+(float)cache_hit));
+	debug_print("Calling prune_cache");
 	prune_cache();
 }
 
