@@ -13,7 +13,12 @@ char rm1_url[128];
 char rm2_url[128];
 char* active_rm;
 
-struct string {
+char cache_path[256] = "/dev/shm/yarn_exporter_cache";
+
+unsigned int cache_expiry = 2;
+
+struct string
+{
 	char *ptr;
 	size_t len;
 };
@@ -47,7 +52,6 @@ size_t writefunc(void *ptr, size_t size, size_t nmemb, struct string *s)
 	return size*nmemb;
 }
 
-// "user", "name", "queue", "startedTime", "applicationType"
 struct app
 {
 	unsigned long long int cluster_timestamp;
@@ -69,12 +73,57 @@ struct stat st = {0};
 
 void initcache()
 {
-	if (stat("/dev/shm/yarn_exporter_cache", &st) == -1)
-		mkdir("/dev/shm/yarn_exporter_cache",0700);
-	if (stat("/dev/shm/yarn_exporter_cache/applications", &st) == -1)
-		mkdir("/dev/shm/yarn_exporter_cache/applications",0700);
-	if (stat("/dev/shm/yarn_exporter_cache/containers", &st) == -1)
-		mkdir("/dev/shm/yarn_exporter_cache/containers",0700);
+	char path[258];
+	if (stat(cache_path, &st) == -1)
+		mkdir(cache_path,0755);
+	sprintf(path,"%s/applications",cache_path);
+	if (stat(path, &st) == -1)
+		mkdir(path,0755);
+	sprintf(path,"%s/containers",cache_path);
+	if (stat(path, &st) == -1)
+		mkdir(path,0755);
+}
+
+int cache_app(struct app a)
+{
+	FILE *outfile;
+	char cache_file[256];
+
+	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,a.cluster_timestamp,a.id);
+	outfile = fopen (cache_file, "w");
+	if (outfile == NULL)
+	{
+		fprintf(stderr, "\nError opend file\n");
+		exit(1);
+	}
+	fwrite(&a, sizeof(struct app), 1, outfile);
+	fclose(outfile);
+	return 0;
+}
+
+int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, struct app *a)
+{
+	FILE *infile;
+	char cache_file[256];
+
+	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,cluster_timestamp,id);
+	infile = fopen (cache_file, "r");
+	if (infile == NULL)
+	{
+		//fprintf(stderr, "\nError opend file\n");
+		return 0;
+	}
+	fread(a, sizeof(struct app), 1, infile);
+	fclose(infile);
+	printf("Loaded %llu %u from cache\n",cluster_timestamp, id);
+	return 1;
+}
+
+void prune_cache()
+{
+	char cmd[256];
+	sprintf(cmd,"find %s -type f -mmin +%u -exec rm {} \\;",cache_path,cache_expiry);
+	// TODO: prune cache
 }
 
 int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, struct app *a)
@@ -83,6 +132,7 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 	char app_url[256];
 	char *ptr;
 	char *ptr1;
+	printf("Fetching %llu %u from RM\n",cluster_timestamp,app_id);
 	while(!success)
 	{
 		printf("IN LOOP\n");
@@ -187,8 +237,12 @@ void parsecgrp(char *cgrp)
 	sscanf(cnt_name,"%llu_%llu_%llu_%llu_%llu",&epoch,&cluster_timestamp,&app_id,&attempt_id,&container_id);
 	printf("%s\n",cnt_name);
 	printf("%llu_%llu_%04llu_%02llu_%06llu\n\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
-	getapp_rm(cluster_timestamp,app_id,&a);
 	//printf("User: %s\n",a.user);
+	if(!read_cached_app(cluster_timestamp,app_id,&a))
+	{
+		getapp_rm(cluster_timestamp,app_id,&a);
+		cache_app(a);
+	}
 	printapp(a);
 	return;
 }
@@ -208,26 +262,31 @@ void gen()
 		parsecgrp(cgrp);
 	}
 	pclose(fp);
+	prune_cache();
 }
 
 int setopt(int argc, char *argv[])
 {
 	int opt;
 	char *ptr;
-	while ((opt = getopt (argc, argv, "r:p:")) != -1)
+
+	while ((opt = getopt (argc, argv, "r:c:e:")) != -1)
 	{
 		switch (opt)
 		{
 			case 'r':
 				ptr = strstr(optarg,",");
 				*ptr=0;
-				strncpy(rm1_url,optarg,128);
-				strncpy(rm2_url,ptr+1,128);
+				strncpy(rm1_url,optarg,127);
+				strncpy(rm2_url,ptr+1,127);
 				*ptr=',';
 				break;
-			//case 'o':
-			//	printf ("Output file: \"%s\"\n", optarg);
-			//	break;
+			case 'c':
+				strncpy(cache_path,optarg,255);
+				break;
+			case 'e':
+				sscanf(optarg,"%u",&cache_expiry);
+				break;
 		}
 	}
 	return 0;
