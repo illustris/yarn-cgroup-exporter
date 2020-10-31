@@ -23,8 +23,10 @@ char rm2_url[128];
 char* active_rm;
 
 char cache_path[256] = "/dev/shm/yarn_exporter_cache";
-unsigned int cache_hit = 0;
-unsigned int cache_miss = 0;
+unsigned int app_cache_hit = 0;
+unsigned int app_cache_miss = 0;
+unsigned int cnt_cache_hit = 0;
+unsigned int cnt_cache_miss = 0;
 
 unsigned int cache_expiry = 60;
 
@@ -133,6 +135,44 @@ int cache_app(struct app a)
 	return 0;
 }
 
+int cache_cnt(struct cnt c)
+{
+	debug_print("cache_cnt: cache container_e%u_%llu_%04u_%02u_%06u\n",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	FILE *outfile;
+	char cache_file[512];
+
+	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u\n",cache_path,c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	outfile = fopen (cache_file, "w");
+	if (outfile == NULL)
+	{
+		fprintf(stderr, "\nError opend file\n");
+		exit(1);
+	}
+	fwrite(&c, sizeof(struct cnt), 1, outfile);
+	fclose(outfile);
+	return 0;
+}
+
+int read_cached_cnt(unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c)
+{
+	FILE *infile;
+	char cache_file[512];
+	debug_print_verbose("read_cached_cnt: attempting to load container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
+	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u\n",cache_path,epoch,cluster_timestamp,app_id,attempt_id,container_id);
+	infile = fopen (cache_file, "r");
+	if (infile == NULL)
+	{
+		debug_print("read_cached_cnt: cache miss for container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
+		cnt_cache_miss++;
+		return 0;
+	}
+	fread(c, sizeof(struct cnt), 1, infile);
+	fclose(infile);
+	debug_print_verbose("read_cached_cnt: cache hit for container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
+	cnt_cache_hit++;
+	return 1;
+}
+
 int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, struct app *a)
 {
 	FILE *infile;
@@ -143,25 +183,28 @@ int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, s
 	if (infile == NULL)
 	{
 		debug_print("read_cached_app: cache miss for application_%llu_%04u\n",cluster_timestamp,id);
-		cache_miss++;
+		app_cache_miss++;
 		return 0;
 	}
 	fread(a, sizeof(struct app), 1, infile);
 	fclose(infile);
 	debug_print_verbose("read_cached_app: cache hit for application_%llu_%04u\n",cluster_timestamp,id);
-	cache_hit++;
+	app_cache_hit++;
 	return 1;
 }
 
 void prune_cache()
 {
-	char prune_cache_path[256];
-	char cache_age[12];
-	char* cmd[] = {"find",0,"-name","application_*","-type","f","-amin",0,"-exec","rm","{}",";",0};
-	sprintf(prune_cache_path,"%s/applications",cache_path);
-	cmd[1] = prune_cache_path;
+	char prune_app_cache_path[256];
+	char prune_cnt_cache_path[512];
+	char cache_age[13];
+	char* cmd[] = {"find",0,0,"-name","application_*","-type","f","-amin",0,"-exec","rm","{}",";",0};
+	sprintf(prune_app_cache_path,"%s/applications",cache_path);
+	sprintf(prune_cnt_cache_path,"%s/containers",cache_path);
+	cmd[1] = prune_app_cache_path;
+	cmd[2] = prune_cnt_cache_path;
 	sprintf(cache_age,"%s%u","+",cache_expiry);
-	cmd[7] = cache_age;
+	cmd[8] = cache_age;
 	debug_print("prune_cache: calling fork\n");
 	pid_t pid = fork();
 
@@ -384,7 +427,11 @@ void parsecgrp(char *cgrp)
 		getapp_rm(cluster_timestamp,app_id,&a);
 		cache_app(a);
 	}
-	getcnt_rm(epoch,cluster_timestamp,app_id,attempt_id,container_id,&c);
+	if(!read_cached_cnt(epoch,cluster_timestamp,app_id,attempt_id,container_id,&c))
+	{
+		getcnt_rm(epoch,cluster_timestamp,app_id,attempt_id,container_id,&c);
+		cache_cnt(c);
+	}
 	printapp(a);
 	printcnt(c);
 	return;
@@ -406,7 +453,8 @@ void gen()
 		parsecgrp(cgrp);
 	}
 	pclose(fp);
-	debug_print("gen: %u cache hits, %u cache misses. %.2f %% cache hit rate\n",cache_hit,cache_miss,100*(float)cache_hit/((float)cache_miss+(float)cache_hit));
+	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
+	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
 }
 
