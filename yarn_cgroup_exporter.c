@@ -23,6 +23,7 @@ char rm2_url[128];
 char* active_rm;
 
 char cache_path[256] = "/dev/shm/yarn_exporter_cache";
+char cgroup_root[64] = "/sys/fs/cgroup/cpu/hadoop-yarn";
 unsigned int app_cache_hit = 0;
 unsigned int app_cache_miss = 0;
 unsigned int cnt_cache_hit = 0;
@@ -88,6 +89,8 @@ struct cnt
 	unsigned int mem;
 	unsigned int cores;
 	unsigned long long int started_time;
+
+	unsigned long long int cpu_time;
 };
 
 void printapp(struct app a)
@@ -98,8 +101,8 @@ void printapp(struct app a)
 
 void printcnt(struct cnt c)
 {
-	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem = %u;\n\tunsigned int cores = %u;\n\tunsigned long long int started_time = %llu;\n}\n\n",
-	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem,c.cores,c.started_time);
+	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem = %u;\n\tunsigned int cores = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n}\n\n",
+	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem,c.cores,c.started_time,c.cpu_time);
 }
 
 struct stat st = {0};
@@ -239,7 +242,8 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 	debug_print("getcnt_rm: fetching container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
 	while(!success)
 	{
-		sprintf(cnt_url,"%s/ws/v1/cluster/apps/application_%llu_%04u",active_rm,cluster_timestamp,app_id);
+		sprintf(cnt_url,"%s/ws/v1/cluster/apps/application_%llu_%04u/appattempts/appattempt_%llu_%04u_%06u/containers/container_e%u_%llu_%04u_%02u_%06u",
+			active_rm,cluster_timestamp,app_id,cluster_timestamp,app_id,attempt_id,epoch,cluster_timestamp,app_id,attempt_id,container_id);
 		debug_print_verbose("getcnt_rm: URL: %s\n",cnt_url);
 		CURL *curl;
 		CURLcode res;
@@ -281,20 +285,23 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 
 			ptr = strstr(s.ptr,"\"allocatedVCores\":");
 			ptr1 = strstr(ptr,"\",");
-			*(ptr1-1) = 0;
-			sscanf(ptr+19,"%u",&c->mem);
-			*(ptr1-1) = '"';
+			*(ptr1) = 0;
+			sscanf(ptr+19,"%u",&c->cores);
+			debug_print_verbose("getcnt_rm: %s\n",ptr);
+			*(ptr1) = '}';
 
 			ptr = strstr(s.ptr,"\"allocatedMB\":");
 			ptr1 = strstr(ptr,"\",");
-			*(ptr1-1) = 0;
+			*(ptr1) = 0;
 			sscanf(ptr+15,"%u",&c->mem);
-			*(ptr1-1) = '"';
+			debug_print_verbose("getcnt_rm: %s\n",ptr);
+			*(ptr1) = '"';
 
 			ptr = strstr(s.ptr,"\"startedTime\":");
 			ptr1 = strstr(ptr,"\",");
-			*(ptr1-1) = 0;
-			sscanf(ptr+14,"%llu",&c->started_time);
+			*(ptr1) = 0;
+			sscanf(ptr+15,"%llu",&c->started_time);
+			debug_print_verbose("getcnt_rm: %s\n",ptr);
 			*(ptr1) = '"';
 
 			// unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c
@@ -401,6 +408,23 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 	return 0;
 }
 
+unsigned long long int cnt_cpu_time(struct cnt c)
+{
+	char cnt_cpuacct_path[256];
+	unsigned long long int cpuacct_usage;
+	sprintf(cnt_cpuacct_path,"%s/container_e%u_%llu_%04u_%02u_%06u/cpuacct.usage",cgroup_root,c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	debug_print_verbose("cnt_cpu_time: reading %s\n",cnt_cpuacct_path);
+	FILE* file = fopen (cnt_cpuacct_path, "r");
+	if(!file)
+	{
+		debug_print("cnt_cpu_time: cpuacct not found: %s\n",cnt_cpuacct_path);
+		return 0;
+	}
+	fscanf(file,"%llu",&cpuacct_usage);
+	debug_print_verbose("cnt_cpu_time: cpuacct usage: %llu\n",cpuacct_usage);
+	return cpuacct_usage;
+}
+
 void parsecgrp(char *cgrp)
 {
 	char cnt_name[128];
@@ -432,6 +456,7 @@ void parsecgrp(char *cgrp)
 		getcnt_rm(epoch,cluster_timestamp,app_id,attempt_id,container_id,&c);
 		cache_cnt(c);
 	}
+	c.cpu_time = cnt_cpu_time(c);
 	printapp(a);
 	printcnt(c);
 	return;
