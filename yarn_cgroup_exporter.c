@@ -14,7 +14,7 @@
 #define debug_print(fmt, ...) \
 	do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
-#define VERBOSE 0
+#define VERBOSE 1
 #define debug_print_verbose(fmt, ...) \
 	do { if (VERBOSE) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
@@ -86,12 +86,20 @@ struct cnt
 	unsigned int attempt_id;
 	unsigned int id;
 
-	unsigned int mem;
-	unsigned int cores;
+	unsigned int mem_allocated;
+	unsigned int cores_allocated;
 	unsigned long long int started_time;
 
 	unsigned long long int cpu_time;
 };
+
+// Traverse as attempt_id, epoch, cluster_timestamp, app_id, container_id to keep tree small
+/*struct cid_trie_node
+{
+	struct cid_trie_node *children[256];
+	struct cnt *c=NULL;
+	unsigned char depth=0;
+};*/
 
 void printapp(struct app a)
 {
@@ -101,8 +109,8 @@ void printapp(struct app a)
 
 void printcnt(struct cnt c)
 {
-	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem = %u;\n\tunsigned int cores = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n}\n\n",
-	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem,c.cores,c.started_time,c.cpu_time);
+	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem_allocated = %u;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n}\n\n",
+	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time);
 }
 
 struct stat st = {0};
@@ -286,14 +294,14 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 			ptr = strstr(s.ptr,"\"allocatedVCores\":");
 			ptr1 = strstr(ptr,"\",");
 			*(ptr1) = 0;
-			sscanf(ptr+19,"%u",&c->cores);
+			sscanf(ptr+19,"%u",&c->cores_allocated);
 			debug_print_verbose("getcnt_rm: %s\n",ptr);
 			*(ptr1) = '}';
 
 			ptr = strstr(s.ptr,"\"allocatedMB\":");
 			ptr1 = strstr(ptr,"\",");
 			*(ptr1) = 0;
-			sscanf(ptr+15,"%u",&c->mem);
+			sscanf(ptr+15,"%u",&c->mem_allocated);
 			debug_print_verbose("getcnt_rm: %s\n",ptr);
 			*(ptr1) = '"';
 
@@ -425,7 +433,7 @@ unsigned long long int cnt_cpu_time(struct cnt c)
 	return cpuacct_usage;
 }
 
-void parsecgrp(char *cgrp)
+void parsecgrp(char *cgrp, unsigned int rss)
 {
 	char cnt_name[128];
 	char *ptr;
@@ -465,18 +473,25 @@ void parsecgrp(char *cgrp)
 void gen()
 {
 	FILE *fp;
-	char cgrp[1024];
-	// TODO: Don't use subshell for sort+uniq
-	fp = popen("/bin/sh -c \"ps --no-header -u nobody -o cgroup | grep -o '/hadoop-yarn/container[^,]*' | sort | uniq\"", "r");
+	char in[1024];
+	char *cgroup_name;
+	unsigned int rss;
+	// TODO: implement sort+uniq+sum(rss) using trie
+	fp = popen("ps --no-header -u nobody -o rss,cgroup", "r");
 	if (fp == NULL)
 	{
 		exit(1);
 	}
-	while (fgets(cgrp, sizeof(cgrp), fp) != NULL)
+	while (fgets(in, sizeof(in), fp) != NULL)
 	{
-		//printf("%s", cgrp);
-		debug_print_verbose("gen: calling parsecgrp(%s)\n",cgrp);
-		parsecgrp(cgrp);
+		debug_print_verbose("gen: read line from ps: %s\n", in);
+		sscanf(in,"%u",&rss);
+		debug_print_verbose("gen: rss = %u\n", rss);
+		cgroup_name = strstr(in,"/hadoop-yarn");
+		if(!cgroup_name)
+			continue;
+		debug_print_verbose("gen: calling parsecgrp(%s)\n",cgroup_name);
+		parsecgrp(cgroup_name,rss);
 	}
 	pclose(fp);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
