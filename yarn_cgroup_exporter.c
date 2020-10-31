@@ -26,7 +26,7 @@ char cache_path[256] = "/dev/shm/yarn_exporter_cache";
 unsigned int cache_hit = 0;
 unsigned int cache_miss = 0;
 
-unsigned int cache_expiry = 2;
+unsigned int cache_expiry = 60;
 
 struct string
 {
@@ -75,10 +75,29 @@ struct app
 	char type[32];
 };
 
+struct cnt
+{
+	unsigned int epoch;
+	unsigned long long int cluster_timestamp;
+	unsigned int app_id;
+	unsigned int attempt_id;
+	unsigned int id;
+
+	unsigned int mem;
+	unsigned int cores;
+	unsigned long long int started_time;
+};
+
 void printapp(struct app a)
 {
 	printf("struct app\n{\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tchar user[64] = %s;\n\tchar name[128] = %s;\n\tchar queue[128] = %s;\n\tunsigned long long int started_time = %llu;\n\tchar type[32] = %s;\n}\n\n",
 	a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
+}
+
+void printcnt(struct cnt c)
+{
+	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem = %u;\n\tunsigned int cores = %u;\n\tunsigned long long int started_time = %llu;\n}\n\n",
+	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem,c.cores,c.started_time);
 }
 
 struct stat st = {0};
@@ -164,6 +183,88 @@ void prune_cache()
 		execvp(cmd[0],cmd);
 		debug_print("prune_cache: child: unexpected return from execvp\n");
 		_exit(EXIT_FAILURE);
+	}
+}
+
+int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c)
+{
+	// cnt_name,"%llu_%llu_%llu_%llu_%llu",&epoch,&cluster_timestamp,&app_id,&attempt_id,&container_id
+	int failover=0,success=0;
+	char cnt_url[512];
+	char *ptr;
+	char *ptr1;
+	debug_print("getcnt_rm: fetching container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
+	while(!success)
+	{
+		sprintf(cnt_url,"%s/ws/v1/cluster/apps/application_%llu_%04u",active_rm,cluster_timestamp,app_id);
+		debug_print_verbose("getcnt_rm: URL: %s\n",cnt_url);
+		CURL *curl;
+		CURLcode res;
+		curl = curl_easy_init();
+		if(!curl)
+			return -1;
+		struct string s;
+		init_string(&s);
+		curl_easy_setopt(curl, CURLOPT_URL, cnt_url);
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &s);
+		res = curl_easy_perform(curl);
+		ptr = strstr(s.ptr,"is standby RM");
+		if(!failover)
+		{
+			if(ptr)
+			{
+				failover = 1;
+				debug_print("getcnt_rm: failover active RM from %s ",active_rm);
+				active_rm = (char *)((unsigned long long int)rm1_url ^ (unsigned long long int) active_rm);
+				active_rm = (char *)((unsigned long long int)rm2_url ^ (unsigned long long int) active_rm);
+				debug_print("to %s\n",active_rm);
+			}
+			else
+			{
+				success = 1;
+			}
+		}
+		else
+		{
+			success = 1;
+			if(ptr)
+				return -1;
+		}
+
+		if(success)
+		{
+			debug_print_verbose("getcnt_rm: response[%zu]: %s\n",s.len,s.ptr);
+
+			ptr = strstr(s.ptr,"\"allocatedVCores\":");
+			ptr1 = strstr(ptr,"\",");
+			*(ptr1-1) = 0;
+			sscanf(ptr+19,"%u",&c->mem);
+			*(ptr1-1) = '"';
+
+			ptr = strstr(s.ptr,"\"allocatedMB\":");
+			ptr1 = strstr(ptr,"\",");
+			*(ptr1-1) = 0;
+			sscanf(ptr+15,"%u",&c->mem);
+			*(ptr1-1) = '"';
+
+			ptr = strstr(s.ptr,"\"startedTime\":");
+			ptr1 = strstr(ptr,"\",");
+			*(ptr1-1) = 0;
+			sscanf(ptr+14,"%llu",&c->started_time);
+			*(ptr1) = '"';
+
+			// unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c
+			(*c).epoch = epoch;
+			(*c).cluster_timestamp = cluster_timestamp;
+			(*c).app_id = app_id;
+			(*c).attempt_id = attempt_id;
+			(*c).id = container_id;
+		}
+
+		free(s.ptr);
+
+		curl_easy_cleanup(curl);
 	}
 }
 
@@ -261,8 +362,10 @@ void parsecgrp(char *cgrp)
 {
 	char cnt_name[128];
 	char *ptr;
-	unsigned long long int epoch,cluster_timestamp,app_id,attempt_id,container_id;
+	unsigned int epoch,app_id,attempt_id,container_id;
+	unsigned long long int cluster_timestamp;
 	struct app a;
+	struct cnt c;
 	ptr = strstr(cgrp,"/container");
 	if(!ptr)
 		return;
@@ -274,14 +377,16 @@ void parsecgrp(char *cgrp)
 		ptr++;
 	}
 	cnt_name[i] = 0;
-	sscanf(cnt_name,"%llu_%llu_%llu_%llu_%llu",&epoch,&cluster_timestamp,&app_id,&attempt_id,&container_id);
+	sscanf(cnt_name,"%u_%llu_%u_%u_%u",&epoch,&cluster_timestamp,&app_id,&attempt_id,&container_id);
 	//printf("User: %s\n",a.user);
 	if(!read_cached_app(cluster_timestamp,app_id,&a))
 	{
 		getapp_rm(cluster_timestamp,app_id,&a);
 		cache_app(a);
 	}
+	getcnt_rm(epoch,cluster_timestamp,app_id,attempt_id,container_id,&c);
 	printapp(a);
+	printcnt(c);
 	return;
 }
 
@@ -302,7 +407,6 @@ void gen()
 	}
 	pclose(fp);
 	debug_print("gen: %u cache hits, %u cache misses. %.2f %% cache hit rate\n",cache_hit,cache_miss,100*(float)cache_hit/((float)cache_miss+(float)cache_hit));
-	debug_print("Calling prune_cache");
 	prune_cache();
 }
 
