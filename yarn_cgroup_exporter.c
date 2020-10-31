@@ -466,7 +466,8 @@ void gen()
 {
 	FILE *fp;
 	char cgrp[1024];
-	fp = popen("/bin/ps --no-header -u nobody -o cgroup", "r");
+	// TODO: Don't use subshell for sort+uniq
+	fp = popen("/bin/sh -c \"ps --no-header -u nobody -o cgroup | grep -o '/hadoop-yarn/container[^,]*' | sort | uniq\"", "r");
 	if (fp == NULL)
 	{
 		exit(1);
