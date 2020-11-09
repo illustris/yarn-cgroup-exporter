@@ -91,6 +91,7 @@ struct cnt
 	unsigned long long int started_time;
 
 	unsigned long long int cpu_time;
+	unsigned long long int rss;
 };
 
 // Traverse as attempt_id, epoch, cluster_timestamp, app_id, container_id to keep tree small
@@ -109,8 +110,8 @@ void printapp(struct app a)
 
 void printcnt(struct cnt c)
 {
-	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem_allocated = %u;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n}\n\n",
-	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time);
+	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem_allocated = %u;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n\tunsigned long long int rss = %llu\n}\n\n",
+	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
 }
 
 struct stat st = {0};
@@ -433,7 +434,7 @@ unsigned long long int cnt_cpu_time(struct cnt c)
 	return cpuacct_usage;
 }
 
-void parsecgrp(char *cgrp, unsigned int rss)
+void parsecgrp(char *cgrp, unsigned long long int rss)
 {
 	char cnt_name[128];
 	char *ptr;
@@ -465,6 +466,7 @@ void parsecgrp(char *cgrp, unsigned int rss)
 		cache_cnt(c);
 	}
 	c.cpu_time = cnt_cpu_time(c);
+	c.rss = rss;
 	printapp(a);
 	printcnt(c);
 	return;
@@ -475,7 +477,7 @@ void gen()
 	FILE *fp;
 	char in[1024];
 	char *cgroup_name;
-	unsigned int rss;
+	unsigned long long int rss;
 	// TODO: implement sort+uniq+sum(rss) using trie
 	fp = popen("ps --no-header -u nobody -o rss,cgroup", "r");
 	if (fp == NULL)
@@ -485,7 +487,7 @@ void gen()
 	while (fgets(in, sizeof(in), fp) != NULL)
 	{
 		debug_print_verbose("gen: read line from ps: %s\n", in);
-		sscanf(in,"%u",&rss);
+		sscanf(in,"%llu",&rss);
 		debug_print_verbose("gen: rss = %u\n", rss);
 		cgroup_name = strstr(in,"/hadoop-yarn");
 		if(!cgroup_name)
