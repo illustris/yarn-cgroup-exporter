@@ -205,6 +205,119 @@ int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, s
 	return 1;
 }
 
+struct cnt_tree_node
+{
+	struct cnt *c;
+	struct cnt_tree_node *left;
+	struct cnt_tree_node *right;
+	struct cnt_tree_node *up;
+};
+
+struct cnt_tree_node *cnt_tree_root = NULL;
+
+struct cnt *get_cnt(unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int id)
+{
+	struct cnt_tree_node *node;
+	node = cnt_tree_root;
+	while(node != NULL)
+	{
+		if(node->c->epoch == epoch && node->c->cluster_timestamp == cluster_timestamp && node->c->app_id == app_id && node->c->attempt_id == attempt_id && node->c->id == id)
+		{
+			return node->c;
+		}
+		else if(node->c->epoch >= epoch && node->c->cluster_timestamp >= cluster_timestamp && node->c->app_id >= app_id && node->c->attempt_id >= attempt_id && node->c->id >= id)
+		{
+			node = node->left;
+			continue;
+		}
+		else
+		{
+			node = node->right;
+			continue;
+		}
+	}
+	return NULL;
+}
+
+int put_cnt(struct cnt *c)
+{
+	struct cnt *dst;
+	struct cnt_tree_node *node;
+	struct cnt_tree_node *last_node;
+
+
+	// init tree on first run
+	if(!cnt_tree_root)
+	{
+		cnt_tree_root = malloc(sizeof(struct cnt_tree_node));
+		cnt_tree_root->c = malloc(sizeof(struct cnt));
+		memcpy(cnt_tree_root->c, c, sizeof(struct cnt));
+		cnt_tree_root->left = NULL;
+		cnt_tree_root->right = NULL;
+		cnt_tree_root->up = NULL;
+		return 1;
+	}
+
+	// search for node
+	node = cnt_tree_root;
+
+	while(1)
+	{
+		if(node->c->epoch == c->epoch && node->c->cluster_timestamp == c->cluster_timestamp && node->c->app_id == c->app_id && node->c->attempt_id == c->attempt_id && node->c->id == c->id)
+		{
+			node->c->rss += c->rss;
+			return 1;
+		}
+		else if(node->c->epoch >= c->epoch && node->c->cluster_timestamp >= c->cluster_timestamp && node->c->app_id >= c->app_id && node->c->attempt_id >= c->attempt_id && node->c->id >= c->id)
+		{
+			// if left node exists, keep going
+			if(node->left)
+			{
+				node = node->left;
+				continue;
+			}
+			node->left = malloc(sizeof(struct cnt_tree_node));
+			memcpy(node->left->c, c, sizeof(struct cnt));
+			return 1;
+		}
+		else
+		{
+			// if right node exists, keep going
+			if(node->right)
+			{
+				node = node->right;
+				continue;
+			}
+			node->right = malloc(sizeof(struct cnt_tree_node));
+			memcpy(node->right->c, c, sizeof(struct cnt));
+			return 1;
+		}
+	}
+}
+
+/*int insert_cnt(struct cnt c)
+{
+	struct cnt *c_in_tree;
+	//c_in_tree = get_cnt(c);
+	if(!c_in_tree)
+	{
+		debug_print("insert_cnt: failed to get container container_e%u_%llu_%04u_%02u_%06u in tree\n",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+		return -1
+	}
+	unsigned int epoch;
+	unsigned long long int cluster_timestamp;
+	unsigned int app_id;
+	unsigned int attempt_id;
+	unsigned int id;
+
+	unsigned int mem_allocated;
+	unsigned int cores_allocated;
+	unsigned long long int started_time;
+
+	unsigned long long int cpu_time;
+	unsigned long long int rss;
+}*/
+
 void prune_cache()
 {
 	char prune_app_cache_path[256];
@@ -469,6 +582,7 @@ void parsecgrp(char *cgrp, unsigned long long int rss)
 	c.rss = rss;
 	printapp(a);
 	printcnt(c);
+	put_cnt(&c);
 	return;
 }
 
