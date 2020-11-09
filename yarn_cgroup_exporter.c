@@ -488,7 +488,8 @@ void gen()
 	{
 		debug_print_verbose("gen: read line from ps: %s\n", in);
 		sscanf(in,"%llu",&rss);
-		debug_print_verbose("gen: rss = %u\n", rss);
+		rss*=1024;
+		debug_print_verbose("gen: rss = %llu\n", rss);
 		cgroup_name = strstr(in,"/hadoop-yarn");
 		if(!cgroup_name)
 			continue;
