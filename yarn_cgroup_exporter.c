@@ -6,6 +6,9 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <curl/curl.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <fcntl.h>
 
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 //Container_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
@@ -14,7 +17,7 @@
 #define debug_print(fmt, ...) \
 	do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
-#define VERBOSE 1
+#define VERBOSE 0
 #define debug_print_verbose(fmt, ...) \
 	do { if (VERBOSE) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
@@ -30,6 +33,184 @@ unsigned int cnt_cache_hit = 0;
 unsigned int cnt_cache_miss = 0;
 
 unsigned int cache_expiry = 60;
+
+char hsperf_basepath[] = "/tmp/hsperfdata_nobody";
+
+struct hsperfdata_prologue
+{
+	unsigned int	magic;			/* magic number - 0xcafec0c0 */
+	unsigned int	entry_offset;	/* offset of the first PerfDataEntry */
+	unsigned int	num_entries;	/* number of allocated PerfData entries */
+};
+
+struct hsperf_file
+{
+	int fd;
+	char *data;
+	unsigned int pid;
+	unsigned long int st_size;
+};
+
+struct gc_metrics
+{
+	unsigned long int	current_heap_capacity ;
+	unsigned long int	current_heap_usage ;
+	unsigned long int	young_gc_cnt;
+	unsigned long int	final_gc_cnt;
+	unsigned int		pid;
+	double				young_gc_time;
+	double				final_gc_time;
+	double				total_gc_time;
+};
+
+int open_jstat(struct hsperf_file *hsfile, unsigned int pid)
+{
+	struct stat mmapstat;
+	char path[128];
+	sprintf(path, "%s/%u", hsperf_basepath, pid);
+	debug_print("open_jstat: Opening PID %u from path %s\n",pid, path);
+	stat(path, &mmapstat);
+	hsfile->st_size = mmapstat.st_size;
+	hsfile->fd = open(path, O_RDONLY);
+	hsfile->data = mmap((caddr_t)0, hsfile->st_size, PROT_READ, MAP_SHARED, hsfile->fd, 0);
+	if((long int)(hsfile->data) == -1)
+	{
+		//printf("Failed to open file\n");
+		debug_print("open_jstat: Failed to open hsperf file for PID %u from path %s\n",pid, path);
+		close(hsfile->fd);
+		return 0;
+	}
+	hsfile->pid = pid;
+	return 1;
+}
+
+void close_jstat(struct hsperf_file *hsfile)
+{
+	munmap(hsfile->data, hsfile->st_size);
+	close(hsfile->fd);
+}
+
+int jstat(struct gc_metrics *gcm, struct hsperf_file *hsfile)
+{
+	unsigned int magic, entry_offset, num_entries;
+	char *entry_base;
+	unsigned int entry_length, name_offset, data_offset, vector_length;
+	unsigned long int value_long, sun_os_hrt_frequency;
+	unsigned long int *value_base;
+	unsigned char *key_base;
+	char key[64];
+	size_t key_length;
+
+	magic = *((unsigned int *)(hsfile->data + 0));
+	//printf("%x\n",magic);
+	if(magic != 0xc0c0feca)
+	{
+		debug_print("jstat: Bad magic number for PID %u\n",hsfile->pid);
+		return -1;
+	}
+
+	entry_offset = *((unsigned int *)(hsfile->data + 24));
+	num_entries = *((unsigned int *)(hsfile->data + 28));
+
+	//printf("%x\n%u\n%u\n",magic,entry_offset,num_entries);
+
+	entry_base = hsfile->data+entry_offset;
+	for (size_t i=0; i < num_entries;i++)
+	{
+		// get some stuff from base pointer + offset
+		entry_length = *((unsigned int *)(entry_base + 0));
+		name_offset = *((unsigned int *)(entry_base + 4));
+		data_offset = *((unsigned int *)(entry_base + 16));
+		vector_length = *((unsigned int *)(entry_base + 8));
+
+		// get pointer to key
+		key_base = entry_base + name_offset;
+		key_length = strlen((char *)key_base);
+		strncpy(key,key_base,key_length);
+		key[key_length]=0;
+
+		// Get pointer to value
+		value_base = (unsigned long int *)(entry_base + data_offset);
+
+		// set entry_base to next entry for the next iter
+		entry_base = entry_base + entry_length;
+
+		// None of the values we need are vectors
+		// Skip if value is a vector
+		if(vector_length)
+		{
+			continue;
+		}
+
+		value_long = *((unsigned long int *)value_base);
+		// TODO: Find less ugly way to do this without compromising performance
+		if(strncmp("sun.gc.collector.0.invocations",key,64) == 0)
+		{
+			gcm->young_gc_cnt = value_long;
+		}
+		else if(strncmp("sun.gc.collector.0.time",key,64) == 0)
+		{
+			gcm->young_gc_time = value_long;
+			gcm->total_gc_time += value_long;
+		}
+		else if(strncmp("sun.gc.collector.1.invocations",key,64) == 0)
+		{
+			gcm->final_gc_cnt = value_long;
+		}
+		else if(strncmp("sun.gc.collector.1.time",key,64) == 0)
+		{
+			gcm->final_gc_time = value_long;
+			gcm->total_gc_time += value_long;
+		}
+		else if(strncmp("sun.gc.generation.0.space.0.capacity",key,64) == 0)
+		{
+			gcm->current_heap_capacity += value_long;
+		}
+		else if(strncmp("sun.gc.generation.0.space.0.used",key,64) == 0)
+		{
+			gcm->current_heap_usage += value_long;
+		}
+		else if(strncmp("sun.gc.generation.0.space.1.capacity",key,64) == 0)
+		{
+			gcm->current_heap_capacity += value_long;
+		}
+		else if(strncmp("sun.gc.generation.0.space.1.used",key,64) == 0)
+		{
+			gcm->current_heap_usage += value_long;
+		}
+		else if(strncmp("sun.gc.generation.0.space.2.capacity",key,64) == 0)
+		{
+			gcm->current_heap_capacity += value_long;
+		}
+		else if(strncmp("sun.gc.generation.0.space.2.used",key,64) == 0)
+		{
+			gcm->current_heap_usage += value_long;
+		}
+		else if(strncmp("sun.gc.generation.1.space.0.capacity",key,64) == 0)
+		{
+			gcm->current_heap_capacity += value_long;
+		}
+		else if(strncmp("sun.gc.generation.1.space.0.used",key,64) == 0)
+		{
+			gcm->current_heap_usage += value_long;
+		}
+		else if(strncmp("sun.os.hrt.frequency",key,64) == 0)
+		{
+			sun_os_hrt_frequency = value_long;
+		}
+		else
+			continue;
+
+		//printf("%s: %lu\n",key,value_long);
+	}
+
+	gcm->young_gc_time /= sun_os_hrt_frequency;
+	gcm->final_gc_time /= sun_os_hrt_frequency;
+	gcm->total_gc_time /= sun_os_hrt_frequency;
+	gcm->pid = hsfile->pid;
+
+	return 0;
+}
 
 struct string
 {
@@ -92,6 +273,8 @@ struct cnt
 
 	unsigned long long int cpu_time;
 	unsigned long long int rss;
+
+	struct gc_metrics gcm;
 };
 
 // Traverse as attempt_id, epoch, cluster_timestamp, app_id, container_id to keep tree small
@@ -111,8 +294,10 @@ void printapp(struct app a)
 void printcnt(struct cnt c)
 {
 	printf("container_e%u_%llu_%04u_%02u_%06u\n",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
-	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned long long int mem_allocated = %llu;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n\tunsigned long long int rss = %llu\n}\n\n",
+	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned long long int mem_allocated = %llu;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n\tunsigned long long int rss = %llu",
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
+	printf("\n\tstruct gc_metrics gcm =\n\t{\n\t\tunsigned long int	current_heap_capacity = %lu\n\t\tunsigned long int	current_heap_usage = %lu\n\t\tunsigned long int	young_gc_cnt = %lu\n\t\tunsigned long int	final_gc_cnt = %lu\n\t\tunsigned int		pid = %u\n\t\tdouble				young_gc_time = %f\n\t\tdouble				final_gc_time = %f\n\t\tdouble				total_gc_time = %f\n\t}\n}\n\n",
+	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
 }
 
 struct stat st = {0};
@@ -240,8 +425,32 @@ struct cnt *get_cnt(unsigned int epoch, unsigned long long int cluster_timestamp
 	return NULL;
 }
 
-int put_cnt(struct cnt *c)
+void cnt_cpy(struct cnt *dst, struct cnt *src, int gc)
 {
+	debug_print("cnt_cpy: GC = %d\n",gc);
+	dst->epoch = src->epoch;
+	dst->cluster_timestamp = src->cluster_timestamp;
+	dst->app_id = src->app_id;
+	dst->attempt_id = src->attempt_id;
+	dst->id = src->id;
+
+	dst->mem_allocated = src->mem_allocated;
+	dst->cores_allocated = src->cores_allocated;
+	dst->started_time = src->started_time;
+
+	dst->cpu_time = src->cpu_time;
+	dst->rss = src->rss;
+
+	if(gc)
+	{
+		debug_print("cnt_cpy: dst->gcm.pid = %u, src->gcm.pid = %u\n",dst->gcm.pid,src->gcm.pid);
+		dst->gcm = src->gcm;
+	}
+}
+
+int put_cnt(struct cnt *c, int gc)
+{
+	debug_print("put_cnt: GC = %d\n",gc);
 	struct cnt *dst;
 	struct cnt_tree_node *node;
 	struct cnt_tree_node *last_node;
@@ -252,7 +461,9 @@ int put_cnt(struct cnt *c)
 	{
 		cnt_tree_root = calloc(1,sizeof(struct cnt_tree_node));
 		cnt_tree_root->c = calloc(1,sizeof(struct cnt));
-		memcpy(cnt_tree_root->c, c, sizeof(struct cnt));
+
+		cnt_cpy(cnt_tree_root->c,c,gc);
+
 		cnt_tree_root->left = NULL;
 		cnt_tree_root->right = NULL;
 		cnt_tree_root->up = NULL;
@@ -267,6 +478,10 @@ int put_cnt(struct cnt *c)
 		if(node->c->epoch == c->epoch && node->c->cluster_timestamp == c->cluster_timestamp && node->c->app_id == c->app_id && node->c->attempt_id == c->attempt_id && node->c->id == c->id)
 		{
 			node->c->rss += c->rss;
+			if(gc)
+			{
+				node->c->gcm = c->gcm;
+			}
 			return 1;
 		}
 		else if(node->c->epoch >= c->epoch && node->c->cluster_timestamp >= c->cluster_timestamp && node->c->app_id >= c->app_id && node->c->attempt_id >= c->attempt_id && node->c->id >= c->id)
@@ -279,7 +494,8 @@ int put_cnt(struct cnt *c)
 			}
 			node->left = calloc(1,sizeof(struct cnt_tree_node));
 			node->left->c = calloc(1,sizeof(struct cnt));
-			memcpy(node->left->c, c, sizeof(struct cnt));
+			cnt_cpy(node->left->c,c,gc);
+			//memcpy(node->left->c, c, sizeof(struct cnt));
 			return 1;
 		}
 		else
@@ -292,7 +508,8 @@ int put_cnt(struct cnt *c)
 			}
 			node->right = calloc(1,sizeof(struct cnt_tree_node));
 			node->right->c = calloc(1,sizeof(struct cnt));
-			memcpy(node->right->c, c, sizeof(struct cnt));
+			cnt_cpy(node->right->c,c,gc);
+			//memcpy(node->right->c, c, sizeof(struct cnt));
 			return 1;
 		}
 	}
@@ -560,7 +777,7 @@ unsigned long long int cnt_cpu_time(struct cnt c)
 	return cpuacct_usage;
 }
 
-void parsecgrp(char *cgrp, unsigned long long int rss)
+void parsecgrp(char *cgrp, unsigned long long int rss, unsigned long long int pid)
 {
 	char cnt_name[128];
 	char *ptr;
@@ -568,6 +785,7 @@ void parsecgrp(char *cgrp, unsigned long long int rss)
 	unsigned long long int cluster_timestamp;
 	struct app a;
 	struct cnt c = {};
+	int gc = 0;
 	ptr = strstr(cgrp,"/container");
 	if(!ptr)
 		return;
@@ -593,9 +811,19 @@ void parsecgrp(char *cgrp, unsigned long long int rss)
 	}
 	c.cpu_time = cnt_cpu_time(c);
 	c.rss = rss;
+
+	struct hsperf_file hsfile = {};
+	memset(&(c.gcm),0,sizeof(struct gc_metrics));
+	if(open_jstat(&hsfile, pid))
+	{
+		jstat(&(c.gcm), &hsfile);
+		gc = 1;
+	}
+	close_jstat(&hsfile);
+
 	//printapp(a);
 	//printcnt(c);
-	put_cnt(&c);
+	put_cnt(&c,gc);
 	return;
 }
 
@@ -604,9 +832,9 @@ void gen()
 	FILE *fp;
 	char in[1024];
 	char *cgroup_name;
-	unsigned long long int rss;
+	unsigned long long int rss,pid;
 	// TODO: implement sort+uniq+sum(rss) using trie
-	fp = popen("ps --no-header -u nobody -o rss,cgroup", "r");
+	fp = popen("ps --no-header -u nobody -o pid,rss,cgroup", "r");
 	if (fp == NULL)
 	{
 		exit(1);
@@ -614,14 +842,14 @@ void gen()
 	while (fgets(in, sizeof(in), fp) != NULL)
 	{
 		debug_print_verbose("gen: read line from ps: %s\n", in);
-		sscanf(in,"%llu",&rss);
+		sscanf(in,"%llu\t%llu",&pid,&rss);
 		rss*=1024;
-		debug_print_verbose("gen: rss = %llu\n", rss);
+		debug_print_verbose("gen: rss = %llu, pid = %llu\n", rss, pid);
 		cgroup_name = strstr(in,"/hadoop-yarn");
 		if(!cgroup_name)
 			continue;
 		debug_print_verbose("gen: calling parsecgrp(%s)\n",cgroup_name);
-		parsecgrp(cgroup_name,rss);
+		parsecgrp(cgroup_name,rss,pid);
 	}
 	pclose(fp);
 	traverse_cnt(cnt_tree_root);
