@@ -86,7 +86,7 @@ struct cnt
 	unsigned int attempt_id;
 	unsigned int id;
 
-	unsigned int mem_allocated;
+	unsigned long long int mem_allocated;
 	unsigned int cores_allocated;
 	unsigned long long int started_time;
 
@@ -110,7 +110,8 @@ void printapp(struct app a)
 
 void printcnt(struct cnt c)
 {
-	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned int mem_allocated = %u;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n\tunsigned long long int rss = %llu\n}\n\n",
+	printf("container_e%u_%llu_%04u_%02u_%06u\n",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	printf("struct cnt\n{\n\tunsigned int epoch = %u;\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tunsigned int attempt_id = %u;\n\tunsigned int id = %u;\n\tunsigned long long int mem_allocated = %llu;\n\tunsigned int cores_allocated = %u;\n\tunsigned long long int started_time = %llu;\n\tcpu_time = %llu\n\tunsigned long long int rss = %llu\n}\n\n",
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
 }
 
@@ -249,8 +250,8 @@ int put_cnt(struct cnt *c)
 	// init tree on first run
 	if(!cnt_tree_root)
 	{
-		cnt_tree_root = malloc(sizeof(struct cnt_tree_node));
-		cnt_tree_root->c = malloc(sizeof(struct cnt));
+		cnt_tree_root = calloc(1,sizeof(struct cnt_tree_node));
+		cnt_tree_root->c = calloc(1,sizeof(struct cnt));
 		memcpy(cnt_tree_root->c, c, sizeof(struct cnt));
 		cnt_tree_root->left = NULL;
 		cnt_tree_root->right = NULL;
@@ -276,7 +277,8 @@ int put_cnt(struct cnt *c)
 				node = node->left;
 				continue;
 			}
-			node->left = malloc(sizeof(struct cnt_tree_node));
+			node->left = calloc(1,sizeof(struct cnt_tree_node));
+			node->left->c = calloc(1,sizeof(struct cnt));
 			memcpy(node->left->c, c, sizeof(struct cnt));
 			return 1;
 		}
@@ -288,7 +290,8 @@ int put_cnt(struct cnt *c)
 				node = node->right;
 				continue;
 			}
-			node->right = malloc(sizeof(struct cnt_tree_node));
+			node->right = calloc(1,sizeof(struct cnt_tree_node));
+			node->right->c = calloc(1,sizeof(struct cnt));
 			memcpy(node->right->c, c, sizeof(struct cnt));
 			return 1;
 		}
@@ -317,6 +320,14 @@ int put_cnt(struct cnt *c)
 	unsigned long long int cpu_time;
 	unsigned long long int rss;
 }*/
+int traverse_cnt(struct cnt_tree_node *node)
+{
+	if(node->left)
+		traverse_cnt(node->left);
+	printcnt(*(node->c));
+	if(node->right)
+		traverse_cnt(node->right);
+}
 
 void prune_cache()
 {
@@ -361,6 +372,7 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 	char cnt_url[512];
 	char *ptr;
 	char *ptr1;
+	unsigned int mem_allocated_mb;
 	debug_print("getcnt_rm: fetching container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
 	while(!success)
 	{
@@ -415,7 +427,8 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 			ptr = strstr(s.ptr,"\"allocatedMB\":");
 			ptr1 = strstr(ptr,"\",");
 			*(ptr1) = 0;
-			sscanf(ptr+15,"%u",&c->mem_allocated);
+			sscanf(ptr+15,"%u",&mem_allocated_mb);
+			c->mem_allocated=((unsigned long long int)mem_allocated_mb*1024*1024);
 			debug_print_verbose("getcnt_rm: %s\n",ptr);
 			*(ptr1) = '"';
 
@@ -554,7 +567,7 @@ void parsecgrp(char *cgrp, unsigned long long int rss)
 	unsigned int epoch,app_id,attempt_id,container_id;
 	unsigned long long int cluster_timestamp;
 	struct app a;
-	struct cnt c;
+	struct cnt c = {};
 	ptr = strstr(cgrp,"/container");
 	if(!ptr)
 		return;
@@ -580,8 +593,8 @@ void parsecgrp(char *cgrp, unsigned long long int rss)
 	}
 	c.cpu_time = cnt_cpu_time(c);
 	c.rss = rss;
-	printapp(a);
-	printcnt(c);
+	//printapp(a);
+	//printcnt(c);
 	put_cnt(&c);
 	return;
 }
@@ -611,6 +624,7 @@ void gen()
 		parsecgrp(cgroup_name,rss);
 	}
 	pclose(fp);
+	traverse_cnt(cnt_tree_root);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
 	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
