@@ -300,6 +300,15 @@ void printcnt(struct cnt c)
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
 }
 
+void jsoncnt(struct cnt c,char *json)
+{
+	printf("{\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	printf("\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
+	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
+	printf("\"current_heap_capacity\":%lu,\"current_heap_usage\":%lu,\"young_gc_cnt\":%lu,\"final_gc_cnt\":%lu,\"pid\":%u,\"young_gc_time\":%f,\"final_gc_time\":%f,\"total_gc_time\":%f}\n",
+	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
+}
+
 struct stat st = {0};
 
 void initcache()
@@ -515,35 +524,14 @@ int put_cnt(struct cnt *c, int gc)
 	}
 }
 
-/*int insert_cnt(struct cnt c)
-{
-	struct cnt *c_in_tree;
-	//c_in_tree = get_cnt(c);
-	if(!c_in_tree)
-	{
-		debug_print("insert_cnt: failed to get container container_e%u_%llu_%04u_%02u_%06u in tree\n",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
-		return -1
-	}
-	unsigned int epoch;
-	unsigned long long int cluster_timestamp;
-	unsigned int app_id;
-	unsigned int attempt_id;
-	unsigned int id;
-
-	unsigned int mem_allocated;
-	unsigned int cores_allocated;
-	unsigned long long int started_time;
-
-	unsigned long long int cpu_time;
-	unsigned long long int rss;
-}*/
-int traverse_cnt(struct cnt_tree_node *node)
+int traverse_cnt(struct cnt_tree_node *node, void (*f)())
 {
 	if(node->left)
-		traverse_cnt(node->left);
-	printcnt(*(node->c));
+		traverse_cnt(node->left,f);
+	//printcnt(*(node->c));
+	f(*(node->c));
 	if(node->right)
-		traverse_cnt(node->right);
+		traverse_cnt(node->right,f);
 }
 
 void prune_cache()
@@ -852,7 +840,7 @@ void gen()
 		parsecgrp(cgroup_name,rss,pid);
 	}
 	pclose(fp);
-	traverse_cnt(cnt_tree_root);
+	traverse_cnt(cnt_tree_root,jsoncnt);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
 	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
