@@ -400,6 +400,99 @@ int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, s
 	return 1;
 }
 
+struct app_tree_node
+{
+	struct app *a;
+	struct app_tree_node *left;
+	struct app_tree_node *right;
+	struct app_tree_node *up;
+};
+
+struct app_tree_node *app_tree_root = NULL;
+
+struct app *get_app(unsigned long long int cluster_timestamp, unsigned int id)
+{
+	struct app_tree_node *node;
+	node = app_tree_root;
+	while(node != NULL)
+	{
+		if(node->a->cluster_timestamp == cluster_timestamp && node->a->id == id)
+		{
+			return node->a;
+		}
+		else if(node->a->cluster_timestamp >= cluster_timestamp && node->a->id >= id)
+		{
+			node = node->left;
+			continue;
+		}
+		else
+		{
+			node = node->right;
+			continue;
+		}
+	}
+	return NULL;
+}
+
+int put_app(struct app *a)
+{
+	struct app *dst;
+	struct app_tree_node *node;
+	struct app_tree_node *last_node;
+
+
+	// init tree on first run
+	if(!app_tree_root)
+	{
+		app_tree_root = calloc(1,sizeof(struct app_tree_node));
+
+		memcpy(app_tree_root->a,a, sizeof(struct app));
+
+		app_tree_root->left = NULL;
+		app_tree_root->right = NULL;
+		app_tree_root->up = NULL;
+		return 1;
+	}
+
+	// search for node
+	node = app_tree_root;
+
+	while(1)
+	{
+		if(node->a->cluster_timestamp == a->cluster_timestamp && node->a->id == a->id)
+		{
+			// app already exists in tree, do nothing
+			return 1;
+		}
+		else if(node->a->cluster_timestamp >= a->cluster_timestamp && node->a->id >= a->id)
+		{
+			// if left node exists, keep going
+			if(node->left)
+			{
+				node = node->left;
+				continue;
+			}
+			node->left = calloc(1,sizeof(struct app_tree_node));
+			node->left->a = calloc(1,sizeof(struct app));
+			memcpy(node->left->a, a, sizeof(struct app));
+			return 1;
+		}
+		else
+		{
+			// if right node exists, keep going
+			if(node->right)
+			{
+				node = node->right;
+				continue;
+			}
+			node->right = calloc(1,sizeof(struct app_tree_node));
+			node->right->a = calloc(1,sizeof(struct app));
+			memcpy(node->right->a, a, sizeof(struct app));
+			return 1;
+		}
+	}
+}
+
 struct cnt_tree_node
 {
 	struct cnt *c;
@@ -463,7 +556,13 @@ int put_cnt(struct cnt *c, int gc)
 	struct cnt *dst;
 	struct cnt_tree_node *node;
 	struct cnt_tree_node *last_node;
+	unsigned long int c_1,c_2,c_3,node_1,node_2,node_3;
 
+	c_1 = ((unsigned long int)(c->epoch))<<32;
+	c_1 += c->app_id;
+	c_2 = ((unsigned long int)(c->attempt_id))<<32;
+	c_2 += c->id;
+	c_3 = c->cluster_timestamp;
 
 	// init tree on first run
 	if(!cnt_tree_root)
@@ -484,8 +583,14 @@ int put_cnt(struct cnt *c, int gc)
 
 	while(1)
 	{
-		if(node->c->epoch == c->epoch && node->c->cluster_timestamp == c->cluster_timestamp && node->c->app_id == c->app_id && node->c->attempt_id == c->attempt_id && node->c->id == c->id)
+		node_1 = ((unsigned long int)(node->c->epoch))<<32;
+		node_1 += node->c->app_id;
+		node_2 = ((unsigned long int)(node->c->attempt_id))<<32;
+		node_2 += node->c->id;
+		node_3 = node->c->cluster_timestamp;
+		if(node_1 == c_1 && node_2 == c_2 && node_3 == c_3)
 		{
+			// If ID matches
 			node->c->rss += c->rss;
 			if(gc)
 			{
@@ -493,9 +598,8 @@ int put_cnt(struct cnt *c, int gc)
 			}
 			return 1;
 		}
-		else if(node->c->epoch >= c->epoch && node->c->cluster_timestamp >= c->cluster_timestamp && node->c->app_id >= c->app_id && node->c->attempt_id >= c->attempt_id && node->c->id >= c->id)
+		if(node_1 > c_1)
 		{
-			// if left node exists, keep going
 			if(node->left)
 			{
 				node = node->left;
@@ -504,12 +608,10 @@ int put_cnt(struct cnt *c, int gc)
 			node->left = calloc(1,sizeof(struct cnt_tree_node));
 			node->left->c = calloc(1,sizeof(struct cnt));
 			cnt_cpy(node->left->c,c,gc);
-			//memcpy(node->left->c, c, sizeof(struct cnt));
 			return 1;
 		}
-		else
+		if(node_1 < c_1)
 		{
-			// if right node exists, keep going
 			if(node->right)
 			{
 				node = node->right;
@@ -518,9 +620,57 @@ int put_cnt(struct cnt *c, int gc)
 			node->right = calloc(1,sizeof(struct cnt_tree_node));
 			node->right->c = calloc(1,sizeof(struct cnt));
 			cnt_cpy(node->right->c,c,gc);
-			//memcpy(node->right->c, c, sizeof(struct cnt));
 			return 1;
 		}
+		if(node_2 > c_2)
+		{
+			if(node->left)
+			{
+				node = node->left;
+				continue;
+			}
+			node->left = calloc(1,sizeof(struct cnt_tree_node));
+			node->left->c = calloc(1,sizeof(struct cnt));
+			cnt_cpy(node->left->c,c,gc);
+			return 1;
+		}
+		if(node_2 < c_2)
+		{
+			if(node->right)
+			{
+				node = node->right;
+				continue;
+			}
+			node->right = calloc(1,sizeof(struct cnt_tree_node));
+			node->right->c = calloc(1,sizeof(struct cnt));
+			cnt_cpy(node->right->c,c,gc);
+			return 1;
+		}
+		if(node_3 > c_3)
+		{
+			if(node->left)
+			{
+				node = node->left;
+				continue;
+			}
+			node->left = calloc(1,sizeof(struct cnt_tree_node));
+			node->left->c = calloc(1,sizeof(struct cnt));
+			cnt_cpy(node->left->c,c,gc);
+			return 1;
+		}
+		if(node_3 < c_3)
+		{
+			if(node->right)
+			{
+				node = node->right;
+				continue;
+			}
+			node->right = calloc(1,sizeof(struct cnt_tree_node));
+			node->right->c = calloc(1,sizeof(struct cnt));
+			cnt_cpy(node->right->c,c,gc);
+			return 1;
+		}
+		debug_print("put_cnt: Uh.... This shouldn't be reachable\n");
 	}
 }
 
