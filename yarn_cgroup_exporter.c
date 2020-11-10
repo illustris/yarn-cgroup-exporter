@@ -300,9 +300,15 @@ void printcnt(struct cnt c)
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
 }
 
+struct app *get_app(unsigned long long int, unsigned int);
+
 void jsoncnt(struct cnt c,char *json)
 {
-	printf("{\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	struct app *a;
+	a = get_app(c.cluster_timestamp, c.app_id);
+	printf("{\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
+		a->cluster_timestamp,a->id,a->user,a->name,a->queue,a->started_time,a->type);
+	printf("\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
 	printf("\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
 	printf("\"current_heap_capacity\":%lu,\"current_heap_usage\":%lu,\"young_gc_cnt\":%lu,\"final_gc_cnt\":%lu,\"pid\":%u,\"young_gc_time\":%f,\"final_gc_time\":%f,\"total_gc_time\":%f}\n",
@@ -420,16 +426,27 @@ struct app *get_app(unsigned long long int cluster_timestamp, unsigned int id)
 		{
 			return node->a;
 		}
-		else if(node->a->cluster_timestamp >= cluster_timestamp && node->a->id >= id)
+		if(node->a->cluster_timestamp > cluster_timestamp)
 		{
 			node = node->left;
 			continue;
 		}
-		else
+		if(node->a->cluster_timestamp < cluster_timestamp)
 		{
 			node = node->right;
 			continue;
 		}
+		if(node->a->id > id)
+		{
+			node = node->left;
+			continue;
+		}
+		if(node->a->id < id)
+		{
+			node = node->right;
+			continue;
+		}
+		debug_print("get_app: Shouldn't be here\n");
 	}
 	return NULL;
 }
@@ -445,6 +462,7 @@ int put_app(struct app *a)
 	if(!app_tree_root)
 	{
 		app_tree_root = calloc(1,sizeof(struct app_tree_node));
+		app_tree_root->a = calloc(1,sizeof(struct app));
 
 		memcpy(app_tree_root->a,a, sizeof(struct app));
 
@@ -464,7 +482,7 @@ int put_app(struct app *a)
 			// app already exists in tree, do nothing
 			return 1;
 		}
-		else if(node->a->cluster_timestamp >= a->cluster_timestamp && node->a->id >= a->id)
+		if(node->a->cluster_timestamp > a->cluster_timestamp)
 		{
 			// if left node exists, keep going
 			if(node->left)
@@ -477,9 +495,8 @@ int put_app(struct app *a)
 			memcpy(node->left->a, a, sizeof(struct app));
 			return 1;
 		}
-		else
+		if(node->a->cluster_timestamp < a->cluster_timestamp)
 		{
-			// if right node exists, keep going
 			if(node->right)
 			{
 				node = node->right;
@@ -490,6 +507,31 @@ int put_app(struct app *a)
 			memcpy(node->right->a, a, sizeof(struct app));
 			return 1;
 		}
+		if(node->a->id > a->id)
+		{
+			if(node->left)
+			{
+				node = node->left;
+				continue;
+			}
+			node->left = calloc(1,sizeof(struct app_tree_node));
+			node->left->a = calloc(1,sizeof(struct app));
+			memcpy(node->left->a, a, sizeof(struct app));
+			return 1;
+		}
+		if(node->a->id < a->id)
+		{
+			if(node->right)
+			{
+				node = node->right;
+				continue;
+			}
+			node->right = calloc(1,sizeof(struct app_tree_node));
+			node->right->a = calloc(1,sizeof(struct app));
+			memcpy(node->right->a, a, sizeof(struct app));
+			return 1;
+		}
+		debug_print("put_app: Shoudn't be here\n");
 	}
 }
 
@@ -961,6 +1003,7 @@ void parsecgrp(char *cgrp, unsigned long long int rss, unsigned long long int pi
 
 	//printapp(a);
 	//printcnt(c);
+	put_app(&a);
 	put_cnt(&c,gc);
 	return;
 }
