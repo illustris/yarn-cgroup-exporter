@@ -814,7 +814,12 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 		{
 			debug_print_verbose("getcnt_rm: response[%zu]: %s\n",s.len,s.ptr);
 			if(strstr(s.ptr,"NotFoundException"))
+			{
+				c->cores_allocated = 0;
+				c->mem_allocated = 0;
+				c->started_time = 0;
 				return -1;
+			}
 
 			ptr = strstr(s.ptr,"\"allocatedVCores\":");
 			ptr1 = strstr(ptr,"\",");
@@ -900,7 +905,14 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 		if(success)
 		{
 			if(strstr(s.ptr,"NotFoundException"))
+			{
+				strcpy(a->user,"<defunct>");
+				strcpy(a->name,"<defunct>");
+				strcpy(a->queue,"<defunct>");
+				strcpy(a->type,"<defunct>");
+				a->started_time = 0;
 				return -1;
+			}
 			debug_print_verbose("getapp_rm: response[%zu]: %s\n",s.len,s.ptr);
 			ptr = strstr(s.ptr,"\"user\":");
 			ptr1 = strstr(ptr,",");
