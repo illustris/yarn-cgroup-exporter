@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <librdkafka/rdkafka.h>
+#include <time.h>
 
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 //Container_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
@@ -40,6 +41,9 @@ char hsperf_basepath[] = "/tmp/hsperfdata_nobody";
 char kafka_buffer[128*1024] = "";
 char kafka_brokers[256];
 char kafka_topic[32];
+
+unsigned long int timestamp;
+char hostname[128];
 
 struct hsperfdata_prologue
 {
@@ -307,7 +311,7 @@ void printcnt(struct cnt c)
 
 struct app *get_app(unsigned long long int, unsigned int);
 
-void jsoncnt(struct cnt c,char *json)
+void jsoncnt(struct cnt c,char *json, unsigned long int t, char *s)
 {
 	struct app a;
 	char buf[2048];
@@ -319,8 +323,8 @@ void jsoncnt(struct cnt c,char *json)
 	// Need to find out why those changes make get_app on dead containers return NULL
 	//if(!a)
 	//	a = calloc(1,sizeof(struct app)); // create an empty app
-	buf_ptr+=sprintf(buf_ptr,"{\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
-		a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
+	buf_ptr+=sprintf(buf_ptr,"{\"timestamp\":%lu,\"hostname\":\"%s\",\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
+		t,h,a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
 	buf_ptr+=sprintf(buf_ptr,"\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
 	buf_ptr+=sprintf(buf_ptr,"\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
@@ -732,12 +736,12 @@ int put_cnt(struct cnt *c, int gc)
 	}
 }
 
-int traverse_cnt(struct cnt_tree_node *node, void (*f)(), char *buff)
+int traverse_cnt(struct cnt_tree_node *node, void (*f)(), char *buff, unsigned int t, char *h)
 {
 	if(node->left)
 		traverse_cnt(node->left,f,buff);
 	//printcnt(*(node->c));
-	f(*(node->c),buff);
+	f(*(node->c),buff,t,h);
 	if(node->right)
 		traverse_cnt(node->right,f,buff);
 }
@@ -1112,6 +1116,10 @@ static void dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void
 
 int main(int argc, char *argv[])
 {
+	timestamp = time(NULL);
+
+	gethostname(&hostname,127);
+
 	active_rm = rm1_url;
 	setopt(argc, argv);
 	initcache();
