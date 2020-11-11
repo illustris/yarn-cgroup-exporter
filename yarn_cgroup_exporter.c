@@ -309,23 +309,24 @@ struct app *get_app(unsigned long long int, unsigned int);
 
 void jsoncnt(struct cnt c,char *json)
 {
-	struct app *a;
+	struct app a;
 	char buf[2048];
 	char *buf_ptr;
 	buf_ptr = buf;
-	a = get_app(c.cluster_timestamp, c.app_id);
-	// TODO: this is a temporary fix for the bug introduced by the last commit
+	int ret = read_cached_app(c.cluster_timestamp,c.app_id,&a);
+	//a = get_app(c.cluster_timestamp, c.app_id);
+	// TODO: this is a temporary hacky fix for the bug introduced by the last commit
 	// Need to find out why those changes make get_app on dead containers return NULL
-	if(!a)
-		a = calloc(1,sizeof(struct app)); // create an empty app
+	//if(!a)
+	//	a = calloc(1,sizeof(struct app)); // create an empty app
 	buf_ptr+=sprintf(buf_ptr,"{\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
-		a->cluster_timestamp,a->id,a->user,a->name,a->queue,a->started_time,a->type);
+		a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
 	buf_ptr+=sprintf(buf_ptr,"\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
 	buf_ptr+=sprintf(buf_ptr,"\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
 	buf_ptr+=sprintf(buf_ptr,"\"current_heap_capacity\":%lu,\"current_heap_usage\":%lu,\"young_gc_cnt\":%lu,\"final_gc_cnt\":%lu,\"pid\":%u,\"young_gc_time\":%f,\"final_gc_time\":%f,\"total_gc_time\":%f}",
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
-	free(a); // no memory leaks pls
+	//free(a); // no memory leaks pls
 	strcat(json,buf);
 	return;
 }
@@ -1065,7 +1066,7 @@ void gen()
 	}
 	pclose(fp);
 	traverse_cnt(cnt_tree_root,jsoncnt,kafka_buffer);
-	//puts(kafka_buffer);
+	puts(kafka_buffer);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
 	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
