@@ -1105,7 +1105,6 @@ int setopt(int argc, char *argv[])
 
 static void dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque)
 {
-	run = 0;
 	return;
 }
 
@@ -1140,8 +1139,6 @@ int main(int argc, char *argv[])
 		}
 		rd_kafka_poll(rk, 0);
 	} while(err);
-
-	//while(run);
 
 	return 0;
 }
