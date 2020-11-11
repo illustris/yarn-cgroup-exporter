@@ -9,11 +9,12 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <fcntl.h>
+#include <librdkafka/rdkafka.h>
 
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 //Container_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 
-#define DEBUG 1
+#define DEBUG 0
 #define debug_print(fmt, ...) \
 	do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
@@ -35,6 +36,10 @@ unsigned int cnt_cache_miss = 0;
 unsigned int cache_expiry = 60;
 
 char hsperf_basepath[] = "/tmp/hsperfdata_nobody";
+
+char kafka_buffer[128*1024] = "";
+char kafka_brokers[256];
+char kafka_topic[32];
 
 struct hsperfdata_prologue
 {
@@ -305,19 +310,24 @@ struct app *get_app(unsigned long long int, unsigned int);
 void jsoncnt(struct cnt c,char *json)
 {
 	struct app *a;
+	char buf[2048];
+	char *buf_ptr;
+	buf_ptr = buf;
 	a = get_app(c.cluster_timestamp, c.app_id);
 	// TODO: this is a temporary fix for the bug introduced by the last commit
 	// Need to find out why those changes make get_app on dead containers return NULL
 	if(!a)
 		a = calloc(1,sizeof(struct app)); // create an empty app
-	printf("{\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
+	buf_ptr+=sprintf(buf_ptr,"{\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
 		a->cluster_timestamp,a->id,a->user,a->name,a->queue,a->started_time,a->type);
-	printf("\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
-	printf("\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
+	buf_ptr+=sprintf(buf_ptr,"\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	buf_ptr+=sprintf(buf_ptr,"\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
-	printf("\"current_heap_capacity\":%lu,\"current_heap_usage\":%lu,\"young_gc_cnt\":%lu,\"final_gc_cnt\":%lu,\"pid\":%u,\"young_gc_time\":%f,\"final_gc_time\":%f,\"total_gc_time\":%f}\n",
+	buf_ptr+=sprintf(buf_ptr,"\"current_heap_capacity\":%lu,\"current_heap_usage\":%lu,\"young_gc_cnt\":%lu,\"final_gc_cnt\":%lu,\"pid\":%u,\"young_gc_time\":%f,\"final_gc_time\":%f,\"total_gc_time\":%f}",
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
 	free(a); // no memory leaks pls
+	strcat(json,buf);
+	return;
 }
 
 struct stat st = {0};
@@ -721,14 +731,14 @@ int put_cnt(struct cnt *c, int gc)
 	}
 }
 
-int traverse_cnt(struct cnt_tree_node *node, void (*f)())
+int traverse_cnt(struct cnt_tree_node *node, void (*f)(), char *buff)
 {
 	if(node->left)
-		traverse_cnt(node->left,f);
+		traverse_cnt(node->left,f,buff);
 	//printcnt(*(node->c));
-	f(*(node->c));
+	f(*(node->c),buff);
 	if(node->right)
-		traverse_cnt(node->right,f);
+		traverse_cnt(node->right,f,buff);
 }
 
 void prune_cache()
@@ -1053,7 +1063,8 @@ void gen()
 		parsecgrp(cgroup_name,rss,pid);
 	}
 	pclose(fp);
-	traverse_cnt(cnt_tree_root,jsoncnt);
+	traverse_cnt(cnt_tree_root,jsoncnt,kafka_buffer);
+	puts(kafka_buffer);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
 	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
@@ -1064,7 +1075,7 @@ int setopt(int argc, char *argv[])
 	int opt;
 	char *ptr;
 
-	while ((opt = getopt (argc, argv, "r:c:e:")) != -1)
+	while ((opt = getopt (argc, argv, "r:c:e:k:t:")) != -1)
 	{
 		switch (opt)
 		{
@@ -1081,9 +1092,21 @@ int setopt(int argc, char *argv[])
 			case 'e':
 				sscanf(optarg,"%u",&cache_expiry);
 				break;
+			case 'k':
+				strncpy(kafka_brokers,optarg,255);
+				break;
+			case 't':
+				strncpy(kafka_topic,optarg,31);
+				break;
 		}
 	}
 	return 0;
+}
+
+static void dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque)
+{
+	run = 0;
+	return;
 }
 
 int main(int argc, char *argv[])
@@ -1092,5 +1115,33 @@ int main(int argc, char *argv[])
 	setopt(argc, argv);
 	initcache();
 	gen();
+
+	rd_kafka_conf_t *conf;
+	conf = rd_kafka_conf_new();
+	char errstr[512];
+	rd_kafka_conf_set(conf, "bootstrap.servers", kafka_brokers, errstr, sizeof(errstr));
+	debug_print("kafka: pushing to servers %s, topic %s\n",kafka_brokers,kafka_topic);
+	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
+	rd_kafka_t *rk;
+	rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
+	size_t len = strlen(kafka_buffer);
+	debug_print("kafka: pushing %lu bytes\n",len);
+	rd_kafka_resp_err_t err;
+	int i=0;
+	do
+	{
+		debug_print("kafka: attempt %d\n",i);
+		err = rd_kafka_producev(rk, RD_KAFKA_V_TOPIC(kafka_topic), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
+			RD_KAFKA_V_VALUE(kafka_buffer, len), RD_KAFKA_V_OPAQUE(NULL), RD_KAFKA_V_END);
+		if (err == RD_KAFKA_RESP_ERR__QUEUE_FULL)
+		{
+			debug_print("kafka: Queue full. Retrying.\n");
+			rd_kafka_poll(rk, 1000);
+		}
+		rd_kafka_poll(rk, 0);
+	} while(err);
+
+	//while(run);
+
 	return 0;
 }
