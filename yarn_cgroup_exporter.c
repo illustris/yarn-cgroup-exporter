@@ -14,11 +14,11 @@
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 //Container_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 
-#define DEBUG 0
+#define DEBUG 1
 #define debug_print(fmt, ...) \
 	do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
-#define VERBOSE 0
+#define VERBOSE 1
 #define debug_print_verbose(fmt, ...) \
 	do { if (VERBOSE) fprintf(stderr, fmt, ##__VA_ARGS__); fflush(stderr); } while (0)
 
@@ -351,7 +351,7 @@ int cache_app(struct app a)
 	FILE *outfile;
 	char cache_file[256];
 
-	sprintf(cache_file,"%s/applications/application_%llu_%04u\n",cache_path,a.cluster_timestamp,a.id);
+	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,a.cluster_timestamp,a.id);
 	outfile = fopen (cache_file, "w");
 	if (outfile == NULL)
 	{
@@ -369,7 +369,7 @@ int cache_cnt(struct cnt c)
 	FILE *outfile;
 	char cache_file[512];
 
-	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u\n",cache_path,c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
+	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u",cache_path,c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
 	outfile = fopen (cache_file, "w");
 	if (outfile == NULL)
 	{
@@ -386,7 +386,7 @@ int read_cached_cnt(unsigned int epoch, unsigned long long int cluster_timestamp
 	FILE *infile;
 	char cache_file[512];
 	debug_print_verbose("read_cached_cnt: attempting to load container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
-	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u\n",cache_path,epoch,cluster_timestamp,app_id,attempt_id,container_id);
+	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u",cache_path,epoch,cluster_timestamp,app_id,attempt_id,container_id);
 	infile = fopen (cache_file, "r");
 	if (infile == NULL)
 	{
@@ -406,7 +406,7 @@ int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, s
 	FILE *infile;
 	char cache_file[256];
 	debug_print_verbose("read_cached_app: attempting to load application_%llu_%04u\n",cluster_timestamp,id);
-	sprintf(cache_file,"%s/applications/application_%llu_%04u\n",cache_path,cluster_timestamp,id);
+	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,cluster_timestamp,id);
 	infile = fopen (cache_file, "r");
 	if (infile == NULL)
 	{
