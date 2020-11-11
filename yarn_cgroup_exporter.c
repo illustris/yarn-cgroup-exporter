@@ -828,11 +828,6 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 		if(success)
 		{
 			debug_print_verbose("getcnt_rm: response[%zu]: %s\n",s.len,s.ptr);
-			c->epoch = epoch;
-			c->cluster_timestamp = cluster_timestamp;
-			c->app_id = app_id;
-			c->attempt_id = attempt_id;
-			c->id = container_id;
 			if(strstr(s.ptr,"NotFoundException"))
 			{
 				c->cores_allocated = 0;
@@ -863,6 +858,12 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 			debug_print_verbose("getcnt_rm: %s\n",ptr);
 			*(ptr1) = '"';
 
+			// unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c
+			(*c).epoch = epoch;
+			(*c).cluster_timestamp = cluster_timestamp;
+			(*c).app_id = app_id;
+			(*c).attempt_id = attempt_id;
+			(*c).id = container_id;
 		}
 
 		free(s.ptr);
