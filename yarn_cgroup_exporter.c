@@ -1064,7 +1064,7 @@ void gen()
 	}
 	pclose(fp);
 	traverse_cnt(cnt_tree_root,jsoncnt,kafka_buffer);
-	puts(kafka_buffer);
+	//puts(kafka_buffer);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
 	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
@@ -1139,6 +1139,7 @@ int main(int argc, char *argv[])
 		}
 		rd_kafka_poll(rk, 0);
 	} while(err);
+	rd_kafka_flush(rk, 10*1000);
 
 	return 0;
 }
