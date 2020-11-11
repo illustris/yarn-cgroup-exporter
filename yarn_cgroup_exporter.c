@@ -310,8 +310,9 @@ void printcnt(struct cnt c)
 }
 
 struct app *get_app(unsigned long long int, unsigned int);
+int read_cached_app(unsigned long long int, unsigned int, struct app*);
 
-void jsoncnt(struct cnt c,char *json, unsigned long int t, char *s)
+void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
 {
 	struct app a;
 	char buf[2048];
@@ -739,11 +740,11 @@ int put_cnt(struct cnt *c, int gc)
 int traverse_cnt(struct cnt_tree_node *node, void (*f)(), char *buff, unsigned int t, char *h)
 {
 	if(node->left)
-		traverse_cnt(node->left,f,buff);
+		traverse_cnt(node->left,f,buff,t,h);
 	//printcnt(*(node->c));
 	f(*(node->c),buff,t,h);
 	if(node->right)
-		traverse_cnt(node->right,f,buff);
+		traverse_cnt(node->right,f,buff,t,h);
 }
 
 void prune_cache()
@@ -1069,7 +1070,7 @@ void gen()
 		parsecgrp(cgroup_name,rss,pid);
 	}
 	pclose(fp);
-	traverse_cnt(cnt_tree_root,jsoncnt,kafka_buffer);
+	traverse_cnt(cnt_tree_root,jsoncnt,kafka_buffer,timestamp,hostname);
 	puts(kafka_buffer);
 	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
 	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
@@ -1118,7 +1119,7 @@ int main(int argc, char *argv[])
 {
 	timestamp = time(NULL);
 
-	gethostname(&hostname,127);
+	gethostname(hostname,127);
 
 	active_rm = rm1_url;
 	setopt(argc, argv);
