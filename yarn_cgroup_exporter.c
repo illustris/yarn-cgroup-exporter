@@ -1117,7 +1117,7 @@ static void dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void
 
 int main(int argc, char *argv[])
 {
-	timestamp = time(NULL);
+	timestamp = time(NULL) * 1000;
 
 	gethostname(hostname,127);
 
