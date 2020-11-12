@@ -141,6 +141,7 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 
 		curl_easy_cleanup(curl);
 	}
+	return 0;
 }
 
 int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, struct app *a, char *rm1_url, char *rm2_url)
@@ -238,6 +239,5 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 
 		curl_easy_cleanup(curl);
 	}
-
 	return 0;
 }

@@ -29,7 +29,7 @@ void init_cache(char *base_path, unsigned int init_cache_expiry)
 	cnt_cache_miss = 0;
 	strncpy(cache_path,base_path,255);
 	cache_expiry = init_cache_expiry;
-	char path[258];
+	char path[288];
 	if (stat(cache_path, &st) == -1)
 		mkdir(cache_path,0755);
 	sprintf(path,"%s/applications",cache_path);
@@ -44,7 +44,7 @@ int cache_app(struct app a)
 {
 	debug_print("cache_app: cache application_%llu_%04u\n",a.cluster_timestamp,a.id);
 	FILE *outfile;
-	char cache_file[256];
+	char cache_file[288];
 
 	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,a.cluster_timestamp,a.id);
 	outfile = fopen (cache_file, "w");
@@ -99,7 +99,7 @@ int read_cached_cnt(unsigned int epoch, unsigned long long int cluster_timestamp
 int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, struct app *a)
 {
 	FILE *infile;
-	char cache_file[256];
+	char cache_file[288];
 	debug_print_verbose("read_cached_app: attempting to load application_%llu_%04u\n",cluster_timestamp,id);
 	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,cluster_timestamp,id);
 	infile = fopen (cache_file, "r");

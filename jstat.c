@@ -43,7 +43,7 @@ int jstat(struct gc_metrics *gcm, struct hsperf_file *hsfile)
 	unsigned int entry_length, name_offset, data_offset, vector_length;
 	unsigned long int value_long, sun_os_hrt_frequency;
 	unsigned long int *value_base;
-	unsigned char *key_base;
+	char *key_base;
 	char key[64];
 	size_t key_length;
 

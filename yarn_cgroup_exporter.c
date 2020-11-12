@@ -41,7 +41,7 @@ void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
 	char buf[2048];
 	char *buf_ptr;
 	buf_ptr = buf;
-	int ret = read_cached_app(c.cluster_timestamp,c.app_id,&a);
+	read_cached_app(c.cluster_timestamp,c.app_id,&a);
 
 	buf_ptr+=sprintf(buf_ptr,"{\"timestamp\":%lu000,\"hostname\":\"%s\",\"application\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
 		t,h,a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
@@ -60,7 +60,6 @@ struct cnt_tree_node
 	struct cnt *c;
 	struct cnt_tree_node *left;
 	struct cnt_tree_node *right;
-	struct cnt_tree_node *up;
 };
 
 struct cnt_tree_node *cnt_tree_root = NULL;
@@ -91,9 +90,7 @@ void cnt_cpy(struct cnt *dst, struct cnt *src, int gc)
 int put_cnt(struct cnt *c, int gc)
 {
 	debug_print("put_cnt: GC = %d\n",gc);
-	struct cnt *dst;
 	struct cnt_tree_node *node;
-	struct cnt_tree_node *last_node;
 	unsigned long int c_1,c_2,c_3,node_1,node_2,node_3;
 
 	c_1 = ((unsigned long int)(c->epoch))<<32;
@@ -112,7 +109,6 @@ int put_cnt(struct cnt *c, int gc)
 
 		cnt_tree_root->left = NULL;
 		cnt_tree_root->right = NULL;
-		cnt_tree_root->up = NULL;
 		return 1;
 	}
 
@@ -214,12 +210,14 @@ int put_cnt(struct cnt *c, int gc)
 
 int traverse_cnt(struct cnt_tree_node *node, void (*f)(), char *buff, unsigned int t, char *h)
 {
+	int ret = 1;
 	if(node->left)
-		traverse_cnt(node->left,f,buff,t,h);
+		ret += traverse_cnt(node->left,f,buff,t,h);
 	//printcnt(*(node->c));
 	f(*(node->c),buff,t,h);
 	if(node->right)
-		traverse_cnt(node->right,f,buff,t,h);
+		ret += traverse_cnt(node->right,f,buff,t,h);
+	return ret;
 }
 
 unsigned long long int cnt_cpu_time(struct cnt c)
