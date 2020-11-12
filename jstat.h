@@ -1,3 +1,6 @@
+#ifndef jstat_structs_h
+#define jstat_structs_h
+
 struct hsperfdata_prologue
 {
 	unsigned int	magic;			/* magic number - 0xcafec0c0 */
@@ -24,6 +27,8 @@ struct gc_metrics
 	double				final_gc_time;
 	double				total_gc_time;
 };
+
+#endif
 
 int open_jstat(struct hsperf_file*, char*, unsigned int);
 void close_jstat(struct hsperf_file*);
