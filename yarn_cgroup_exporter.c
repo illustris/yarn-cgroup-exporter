@@ -324,7 +324,7 @@ void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
 	// Need to find out why those changes make get_app on dead containers return NULL
 	//if(!a)
 	//	a = calloc(1,sizeof(struct app)); // create an empty app
-	buf_ptr+=sprintf(buf_ptr,"{\"timestamp\":%lu,\"hostname\":\"%s\",\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
+	buf_ptr+=sprintf(buf_ptr,"{\"timestamp\":%lu000,\"hostname\":\"%s\",\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
 		t,h,a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
 	buf_ptr+=sprintf(buf_ptr,"\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
 	buf_ptr+=sprintf(buf_ptr,"\"epoch\":%u,\"cluster_timestamp\":%llu,\"app_id\":%u,\"attempt_id\":%u,\"id\":%u,\"mem_allocated\":%llu,\"cores_allocated\":%u,\"started_time\":%llu,\"cpu_time\":%llu,\"rss\":%llu,",
@@ -1117,7 +1117,7 @@ static void dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void
 
 int main(int argc, char *argv[])
 {
-	timestamp = time(NULL) * 1000;
+	timestamp = time(NULL);
 
 	gethostname(hostname,127);
 
