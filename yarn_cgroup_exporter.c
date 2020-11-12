@@ -102,14 +102,6 @@ struct cnt
 	struct gc_metrics gcm;
 };
 
-// Traverse as attempt_id, epoch, cluster_timestamp, app_id, container_id to keep tree small
-/*struct cid_trie_node
-{
-	struct cid_trie_node *children[256];
-	struct cnt *c=NULL;
-	unsigned char depth=0;
-};*/
-
 void printapp(struct app a)
 {
 	printf("struct app\n{\n\tunsigned long long int cluster_timestamp = %llu;\n\tunsigned int app_id = %u;\n\tchar user[64] = %s;\n\tchar name[128] = %s;\n\tchar queue[128] = %s;\n\tunsigned long long int started_time = %llu;\n\tchar type[32] = %s;\n}\n\n",
@@ -125,7 +117,6 @@ void printcnt(struct cnt c)
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
 }
 
-//struct app *get_app(unsigned long long int, unsigned int);
 int read_cached_app(unsigned long long int, unsigned int, struct app*);
 
 void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
@@ -135,11 +126,7 @@ void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
 	char *buf_ptr;
 	buf_ptr = buf;
 	int ret = read_cached_app(c.cluster_timestamp,c.app_id,&a);
-	//a = get_app(c.cluster_timestamp, c.app_id);
-	// TODO: this is a temporary hacky fix for the bug introduced by the last commit
-	// Need to find out why those changes make get_app on dead containers return NULL
-	//if(!a)
-	//	a = calloc(1,sizeof(struct app)); // create an empty app
+
 	buf_ptr+=sprintf(buf_ptr,"{\"timestamp\":%lu000,\"hostname\":\"%s\",\"application_id\":\"application_%llu_%04u\",\"user\":\"%s\",\"name\":\"%s\",\"queue\":\"%s\",\"app_start_time\":%llu,\"type\":\"%s\",",
 		t,h,a.cluster_timestamp,a.id,a.user,a.name,a.queue,a.started_time,a.type);
 	buf_ptr+=sprintf(buf_ptr,"\"container\":\"container_e%u_%llu_%04u_%02u_%06u\",",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
@@ -147,7 +134,7 @@ void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
 	buf_ptr+=sprintf(buf_ptr,"\"current_heap_capacity\":%lu,\"current_heap_usage\":%lu,\"young_gc_cnt\":%lu,\"final_gc_cnt\":%lu,\"pid\":%u,\"young_gc_time\":%f,\"final_gc_time\":%f,\"total_gc_time\":%f}",
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
-	//free(a); // no memory leaks pls
+
 	strcat(json,buf);
 	return;
 }
@@ -242,138 +229,6 @@ int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, s
 	app_cache_hit++;
 	return 1;
 }
-
-/*
-struct app_tree_node
-{
-	struct app *a;
-	struct app_tree_node *left;
-	struct app_tree_node *right;
-	struct app_tree_node *up;
-};
-
-struct app_tree_node *app_tree_root = NULL;
-
-struct app *get_app(unsigned long long int cluster_timestamp, unsigned int id)
-{
-	struct app_tree_node *node;
-	node = app_tree_root;
-	while(node != NULL)
-	{
-		if(node->a->cluster_timestamp == cluster_timestamp && node->a->id == id)
-		{
-			return node->a;
-		}
-		if(node->a->cluster_timestamp > cluster_timestamp)
-		{
-			node = node->left;
-			continue;
-		}
-		if(node->a->cluster_timestamp < cluster_timestamp)
-		{
-			node = node->right;
-			continue;
-		}
-		if(node->a->id > id)
-		{
-			node = node->left;
-			continue;
-		}
-		if(node->a->id < id)
-		{
-			node = node->right;
-			continue;
-		}
-		debug_print("get_app: Shouldn't be here\n");
-	}
-	return NULL;
-}
-
-
-int put_app(struct app *a)
-{
-	struct app *dst;
-	struct app_tree_node *node;
-	struct app_tree_node *last_node;
-
-
-	// init tree on first run
-	if(!app_tree_root)
-	{
-		app_tree_root = calloc(1,sizeof(struct app_tree_node));
-		app_tree_root->a = calloc(1,sizeof(struct app));
-
-		memcpy(app_tree_root->a,a, sizeof(struct app));
-
-		app_tree_root->left = NULL;
-		app_tree_root->right = NULL;
-		app_tree_root->up = NULL;
-		return 1;
-	}
-
-	// search for node
-	node = app_tree_root;
-
-	while(1)
-	{
-		if(node->a->cluster_timestamp == a->cluster_timestamp && node->a->id == a->id)
-		{
-			// app already exists in tree, do nothing
-			return 1;
-		}
-		if(node->a->cluster_timestamp > a->cluster_timestamp)
-		{
-			// if left node exists, keep going
-			if(node->left)
-			{
-				node = node->left;
-				continue;
-			}
-			node->left = calloc(1,sizeof(struct app_tree_node));
-			node->left->a = calloc(1,sizeof(struct app));
-			memcpy(node->left->a, a, sizeof(struct app));
-			return 1;
-		}
-		if(node->a->cluster_timestamp < a->cluster_timestamp)
-		{
-			if(node->right)
-			{
-				node = node->right;
-				continue;
-			}
-			node->right = calloc(1,sizeof(struct app_tree_node));
-			node->right->a = calloc(1,sizeof(struct app));
-			memcpy(node->right->a, a, sizeof(struct app));
-			return 1;
-		}
-		if(node->a->id > a->id)
-		{
-			if(node->left)
-			{
-				node = node->left;
-				continue;
-			}
-			node->left = calloc(1,sizeof(struct app_tree_node));
-			node->left->a = calloc(1,sizeof(struct app));
-			memcpy(node->left->a, a, sizeof(struct app));
-			return 1;
-		}
-		if(node->a->id < a->id)
-		{
-			if(node->right)
-			{
-				node = node->right;
-				continue;
-			}
-			node->right = calloc(1,sizeof(struct app_tree_node));
-			node->right->a = calloc(1,sizeof(struct app));
-			memcpy(node->right->a, a, sizeof(struct app));
-			return 1;
-		}
-		debug_print("put_app: Shoudn't be here\n");
-	}
-}
-*/
 
 struct cnt_tree_node
 {
@@ -870,7 +725,6 @@ void gen()
 	char in[1024];
 	char *cgroup_name;
 	unsigned long long int rss,pid;
-	// TODO: implement sort+uniq+sum(rss) using trie
 	fp = popen("ps --no-header -u nobody -o pid,rss,cgroup", "r");
 	if (fp == NULL)
 	{
