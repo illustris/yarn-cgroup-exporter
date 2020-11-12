@@ -11,6 +11,7 @@
 #include "jstat.h"
 #include "debug.h"
 #include "yarn_rm_api.h"
+#include "yarn_structs_cache.h"
 
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
 //Container_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
@@ -18,14 +19,10 @@
 char rm1_url[128];
 char rm2_url[128];
 
-char cache_path[256] = "/dev/shm/yarn_exporter_cache";
-char cgroup_root[64] = "/sys/fs/cgroup/cpu/hadoop-yarn";
-unsigned int app_cache_hit = 0;
-unsigned int app_cache_miss = 0;
-unsigned int cnt_cache_hit = 0;
-unsigned int cnt_cache_miss = 0;
+unsigned int init_cache_expiry = 60;
 
-unsigned int cache_expiry = 60;
+char init_cache_path[256] = "/dev/shm/yarn_exporter_cache";
+char cgroup_root[64] = "/sys/fs/cgroup/cpu/hadoop-yarn";
 
 char hsperf_basepath[] = "/tmp/hsperfdata_nobody";
 
@@ -56,97 +53,6 @@ void jsoncnt(struct cnt c,char *json, unsigned long int t, char *h)
 
 	strcat(json,buf);
 	return;
-}
-
-struct stat st = {0};
-
-void initcache()
-{
-	char path[258];
-	if (stat(cache_path, &st) == -1)
-		mkdir(cache_path,0755);
-	sprintf(path,"%s/applications",cache_path);
-	if (stat(path, &st) == -1)
-		mkdir(path,0755);
-	sprintf(path,"%s/containers",cache_path);
-	if (stat(path, &st) == -1)
-		mkdir(path,0755);
-}
-
-int cache_app(struct app a)
-{
-	debug_print("cache_app: cache application_%llu_%04u\n",a.cluster_timestamp,a.id);
-	FILE *outfile;
-	char cache_file[256];
-
-	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,a.cluster_timestamp,a.id);
-	outfile = fopen (cache_file, "w");
-	if (outfile == NULL)
-	{
-		fprintf(stderr, "\nError opend file\n");
-		exit(1);
-	}
-	fwrite(&a, sizeof(struct app), 1, outfile);
-	fclose(outfile);
-	return 0;
-}
-
-int cache_cnt(struct cnt c)
-{
-	debug_print("cache_cnt: cache container_e%u_%llu_%04u_%02u_%06u\n",c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
-	FILE *outfile;
-	char cache_file[512];
-
-	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u",cache_path,c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id);
-	outfile = fopen (cache_file, "w");
-	if (outfile == NULL)
-	{
-		fprintf(stderr, "\nError opend file\n");
-		exit(1);
-	}
-	fwrite(&c, sizeof(struct cnt), 1, outfile);
-	fclose(outfile);
-	return 0;
-}
-
-int read_cached_cnt(unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c)
-{
-	FILE *infile;
-	char cache_file[512];
-	debug_print_verbose("read_cached_cnt: attempting to load container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
-	sprintf(cache_file,"%s/containers/container_e%u_%llu_%04u_%02u_%06u",cache_path,epoch,cluster_timestamp,app_id,attempt_id,container_id);
-	infile = fopen (cache_file, "r");
-	if (infile == NULL)
-	{
-		debug_print("read_cached_cnt: cache miss for container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
-		cnt_cache_miss++;
-		return 0;
-	}
-	fread(c, sizeof(struct cnt), 1, infile);
-	fclose(infile);
-	debug_print_verbose("read_cached_cnt: cache hit for container_e%u_%llu_%04u_%02u_%06u\n",epoch,cluster_timestamp,app_id,attempt_id,container_id);
-	cnt_cache_hit++;
-	return 1;
-}
-
-int read_cached_app(unsigned long long int cluster_timestamp, unsigned int id, struct app *a)
-{
-	FILE *infile;
-	char cache_file[256];
-	debug_print_verbose("read_cached_app: attempting to load application_%llu_%04u\n",cluster_timestamp,id);
-	sprintf(cache_file,"%s/applications/application_%llu_%04u",cache_path,cluster_timestamp,id);
-	infile = fopen (cache_file, "r");
-	if (infile == NULL)
-	{
-		debug_print("read_cached_app: cache miss for application_%llu_%04u\n",cluster_timestamp,id);
-		app_cache_miss++;
-		return 0;
-	}
-	fread(a, sizeof(struct app), 1, infile);
-	fclose(infile);
-	debug_print_verbose("read_cached_app: cache hit for application_%llu_%04u\n",cluster_timestamp,id);
-	app_cache_hit++;
-	return 1;
 }
 
 struct cnt_tree_node
@@ -340,42 +246,6 @@ int traverse_cnt(struct cnt_tree_node *node, void (*f)(), char *buff, unsigned i
 		traverse_cnt(node->right,f,buff,t,h);
 }
 
-void prune_cache()
-{
-	char prune_app_cache_path[256];
-	char prune_cnt_cache_path[512];
-	char cache_age[13];
-	char* cmd[] = {"find",0,0,"-name","application_*","-type","f","-amin",0,"-exec","rm","{}",";",0};
-	sprintf(prune_app_cache_path,"%s/applications",cache_path);
-	sprintf(prune_cnt_cache_path,"%s/containers",cache_path);
-	cmd[1] = prune_app_cache_path;
-	cmd[2] = prune_cnt_cache_path;
-	sprintf(cache_age,"%s%u","+",cache_expiry);
-	cmd[8] = cache_age;
-	debug_print("prune_cache: calling fork\n");
-	pid_t pid = fork();
-
-	if (pid == -1)
-	{
-		debug_print("prune_cache: fork failed\n");
-		return;
-	}
-	else if (pid > 0)
-	{
-		int status;
-		debug_print("prune_cache: parent: waiting\n");
-		waitpid(pid, &status, 0);
-		debug_print("prune_cache: parent: resume\n");
-	}
-	else
-	{
-		debug_print("prune_cache: child: pruning %s\n",cmd[1]);
-		execvp(cmd[0],cmd);
-		debug_print("prune_cache: child: unexpected return from execvp\n");
-		_exit(EXIT_FAILURE);
-	}
-}
-
 unsigned long long int cnt_cpu_time(struct cnt c)
 {
 	char cnt_cpuacct_path[256];
@@ -470,8 +340,8 @@ void gen()
 	pclose(fp);
 	traverse_cnt(cnt_tree_root,jsoncnt,kafka_buffer,timestamp,hostname);
 	//puts(kafka_buffer);
-	debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
-	debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
+	//debug_print("gen: %u app cache hits, %u app cache misses. %.2f %% app cache hit rate\n",app_cache_hit,app_cache_miss,100*(float)app_cache_hit/((float)app_cache_miss+(float)app_cache_hit));
+	//debug_print("gen: %u container cache hits, %u container cache misses. %.2f %% container cache hit rate\n",cnt_cache_hit,cnt_cache_miss,100*(float)cnt_cache_hit/((float)cnt_cache_miss+(float)cnt_cache_hit));
 	prune_cache();
 }
 
@@ -492,10 +362,10 @@ int setopt(int argc, char *argv[])
 				*ptr=',';
 				break;
 			case 'c':
-				strncpy(cache_path,optarg,255);
+				strncpy(init_cache_path,optarg,255);
 				break;
 			case 'e':
-				sscanf(optarg,"%u",&cache_expiry);
+				sscanf(optarg,"%u",&init_cache_expiry);
 				break;
 			case 'k':
 				strncpy(kafka_brokers,optarg,255);
@@ -522,7 +392,7 @@ int main(int argc, char *argv[])
 	init_rm_api(rm1_url);
 
 	setopt(argc, argv);
-	initcache();
+	init_cache(init_cache_path, init_cache_expiry);
 	gen();
 
 	rd_kafka_conf_t *conf;
