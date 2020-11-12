@@ -5,12 +5,12 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/types.h>
-#include <librdkafka/rdkafka.h>
 #include <time.h>
 
 #include "jstat.h"
 #include "debug.h"
 #include "yarn_rm_api.h"
+#include "kafka_client.h"
 #include "yarn_structs_cache.h"
 
 //Container_e{epoch}_{clusterTimestamp}_{appId}_{attemptId}_{containerId}
@@ -378,11 +378,6 @@ int setopt(int argc, char *argv[])
 	return 0;
 }
 
-static void dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque)
-{
-	return;
-}
-
 int main(int argc, char *argv[])
 {
 	timestamp = time(NULL);
@@ -395,31 +390,8 @@ int main(int argc, char *argv[])
 	init_cache(init_cache_path, init_cache_expiry);
 	gen();
 
-	rd_kafka_conf_t *conf;
-	conf = rd_kafka_conf_new();
-	char errstr[512];
-	rd_kafka_conf_set(conf, "bootstrap.servers", kafka_brokers, errstr, sizeof(errstr));
-	debug_print("kafka: pushing to servers %s, topic %s\n",kafka_brokers,kafka_topic);
-	rd_kafka_conf_set_dr_msg_cb(conf, dr_msg_cb);
-	rd_kafka_t *rk;
-	rk = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
-	size_t len = strlen(kafka_buffer);
-	debug_print("kafka: pushing %lu bytes\n",len);
-	rd_kafka_resp_err_t err;
-	int i=0;
-	do
-	{
-		debug_print("kafka: attempt %d\n",i);
-		err = rd_kafka_producev(rk, RD_KAFKA_V_TOPIC(kafka_topic), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
-			RD_KAFKA_V_VALUE(kafka_buffer, len), RD_KAFKA_V_OPAQUE(NULL), RD_KAFKA_V_END);
-		if (err == RD_KAFKA_RESP_ERR__QUEUE_FULL)
-		{
-			debug_print("kafka: Queue full. Retrying.\n");
-			rd_kafka_poll(rk, 1000);
-		}
-		rd_kafka_poll(rk, 0);
-	} while(err);
-	rd_kafka_flush(rk, 10*1000);
+	init_kafka(kafka_brokers);
+	push_kafka(kafka_buffer,kafka_topic);
 
 	return 0;
 }
