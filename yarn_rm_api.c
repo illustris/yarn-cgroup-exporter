@@ -98,6 +98,11 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 
 		if(success)
 		{
+			c->epoch = epoch;
+			c->cluster_timestamp = cluster_timestamp;
+			c->app_id = app_id;
+			c->attempt_id = attempt_id;
+			c->id = container_id;
 			debug_print_verbose("getcnt_rm: response[%zu]: %s\n",s.len,s.ptr);
 			if(strstr(s.ptr,"NotFoundException"))
 			{
@@ -128,13 +133,6 @@ int getcnt_rm(unsigned int epoch, unsigned long long int cluster_timestamp, unsi
 			sscanf(ptr+15,"%llu",&c->started_time);
 			debug_print_verbose("getcnt_rm: %s\n",ptr);
 			*(ptr1) = '"';
-
-			// unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int container_id, struct cnt *c
-			(*c).epoch = epoch;
-			(*c).cluster_timestamp = cluster_timestamp;
-			(*c).app_id = app_id;
-			(*c).attempt_id = attempt_id;
-			(*c).id = container_id;
 		}
 
 		free(s.ptr);
@@ -191,6 +189,9 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 
 		if(success)
 		{
+			a->id = app_id;
+			a->cluster_timestamp = cluster_timestamp;
+			debug_print_verbose("getapp_rm: response[%zu]: %s\n",s.len,s.ptr);
 			if(strstr(s.ptr,"NotFoundException"))
 			{
 				strcpy(a->user,"<defunct>");
@@ -200,7 +201,6 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 				a->started_time = 0;
 				return -1;
 			}
-			debug_print_verbose("getapp_rm: response[%zu]: %s\n",s.len,s.ptr);
 			ptr = strstr(s.ptr,"\"user\":");
 			ptr1 = strstr(ptr,",");
 			*(ptr1-1) = 0;
@@ -230,9 +230,6 @@ int getapp_rm(unsigned long long int cluster_timestamp, unsigned int app_id, str
 			//*(ptr1) = 0;
 			sscanf(ptr+14,"%llu",&a->started_time);
 			//*(ptr1) = ',';
-
-			(*a).id = app_id;
-			(*a).cluster_timestamp = cluster_timestamp;
 		}
 
 		free(s.ptr);
