@@ -65,30 +65,6 @@ struct cnt_tree_node
 
 struct cnt_tree_node *cnt_tree_root = NULL;
 
-struct cnt *get_cnt(unsigned int epoch, unsigned long long int cluster_timestamp, unsigned int app_id, unsigned int attempt_id, unsigned int id)
-{
-	struct cnt_tree_node *node;
-	node = cnt_tree_root;
-	while(node != NULL)
-	{
-		if(node->c->epoch == epoch && node->c->cluster_timestamp == cluster_timestamp && node->c->app_id == app_id && node->c->attempt_id == attempt_id && node->c->id == id)
-		{
-			return node->c;
-		}
-		else if(node->c->epoch >= epoch && node->c->cluster_timestamp >= cluster_timestamp && node->c->app_id >= app_id && node->c->attempt_id >= attempt_id && node->c->id >= id)
-		{
-			node = node->left;
-			continue;
-		}
-		else
-		{
-			node = node->right;
-			continue;
-		}
-	}
-	return NULL;
-}
-
 void cnt_cpy(struct cnt *dst, struct cnt *src, int gc)
 {
 	debug_print("cnt_cpy: GC = %d\n",gc);
