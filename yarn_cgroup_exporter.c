@@ -356,6 +356,8 @@ int main(int argc, char *argv[])
 {
 	timestamp = time(NULL);
 
+	enable_core_dump();
+
 	gethostname(hostname,127);
 
 	init_rm_api(rm1_url);

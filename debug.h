@@ -14,5 +14,6 @@
 
 void printapp(struct app a);
 void printcnt(struct cnt c);
+int enable_core_dump();
 
 #endif

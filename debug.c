@@ -1,4 +1,5 @@
 #include "debug.h"
+#include <sys/resource.h>
 
 void printapp(struct app a)
 {
@@ -13,4 +14,13 @@ void printcnt(struct cnt c)
 	c.epoch,c.cluster_timestamp,c.app_id,c.attempt_id,c.id,c.mem_allocated,c.cores_allocated,c.started_time,c.cpu_time,c.rss);
 	printf("\n\tstruct gc_metrics gcm =\n\t{\n\t\tunsigned long int	current_heap_capacity = %lu\n\t\tunsigned long int	current_heap_usage = %lu\n\t\tunsigned long int	young_gc_cnt = %lu\n\t\tunsigned long int	final_gc_cnt = %lu\n\t\tunsigned int		pid = %u\n\t\tdouble				young_gc_time = %f\n\t\tdouble				final_gc_time = %f\n\t\tdouble				total_gc_time = %f\n\t}\n}\n\n",
 	c.gcm.current_heap_capacity,c.gcm.current_heap_usage,c.gcm.young_gc_cnt,c.gcm.final_gc_cnt,c.gcm.pid,c.gcm.young_gc_time,c.gcm.final_gc_time,c.gcm.total_gc_time);
+}
+
+int enable_core_dump(){
+	struct rlimit corelim;
+
+	corelim.rlim_cur = RLIM_INFINITY;
+	corelim.rlim_max = RLIM_INFINITY;
+
+	return (0 == setrlimit(RLIMIT_CORE, &corelim));
 }
