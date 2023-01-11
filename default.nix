@@ -5,5 +5,4 @@ stdenv.mkDerivation {
 	src = ./src;
 	nativeBuildInputs = [ cmake ];
 	buildInputs = [ curl rdkafka ];
-	#postUnpack = "id; env; false";
 }
